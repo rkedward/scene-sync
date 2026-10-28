@@ -758,3 +758,31 @@ async fn sync_groups() {
         .unwrap();
     assert!(config(ta).await.sync.is_none());
 }
+
+#[tokio::test]
+async fn version_and_backup() {
+    let (base, _dir) = start().await;
+    let http = reqwest::Client::new();
+    let v: serde_json::Value = http
+        .get(format!("{base}/api/v1/version"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+    let res = http
+        .get(format!("{base}/api/v1/admin/backup"))
+        .basic_auth("admin", Some("secret"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    assert!(res.headers()["content-disposition"]
+        .to_str()
+        .unwrap()
+        .contains("scenesync-backup-"));
+    let body = res.bytes().await.unwrap();
+    assert!(body.starts_with(b"SQLite format 3\0"));
+}

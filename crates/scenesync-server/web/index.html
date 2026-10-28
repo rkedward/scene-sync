@@ -64,7 +64,7 @@
 </style>
 </head>
 <body>
-<header><h1>SceneSync</h1><span>Command center</span></header>
+<header><h1>SceneSync</h1><span>Command center <span id="version"></span></span><a href="/api/v1/admin/backup" style="margin-left:auto;font-size:13px;color:var(--muted)" title="Projectors, schedules, groups and clip list. Clips themselves are not included.">Download backup</a></header>
 <main>
   <section id="pairing">
     <h2>Add a projector</h2>
@@ -951,6 +951,7 @@ $("upload").addEventListener("click", () => {
 
 refresh();
 setInterval(refresh, 3000);
+api("GET", "/api/v1/version").then((v) => ($("version").textContent = `v${v.version}`)).catch(() => {});
 </script>
 </body>
 </html>

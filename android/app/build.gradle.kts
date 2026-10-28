@@ -13,9 +13,10 @@ android {
         // The HY300 Pro+ runs Android 14 (API 34). 26 keeps older projectors possible.
         minSdk = 26
         targetSdk = 34
-        // CI builds count up, so a newer build can always replace an older one.
-        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()?.plus(100) ?: 1
-        versionName = "0.3.0"
+        // Minutes since 2026-01-01 at build time: every newer build (CI, release
+        // or local) has a higher number, so it can replace an older one.
+        versionCode = (System.currentTimeMillis() / 60_000 - 29_453_760).toInt()
+        versionName = System.getenv("SCENESYNC_VERSION") ?: "0.5.0"
     }
 
     signingConfigs {

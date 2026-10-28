@@ -6,7 +6,7 @@ Schedule and play video clips on several projectors around a house, controlled f
 - Each projector runs the **SceneSync Player** Android app. It downloads its clips and schedule and keeps playing them if the Pi or Wi-Fi goes down.
 - A **test player** (`scenesync-sim`) runs the same protocol on a laptop, so you can try everything without a projector.
 
-Status: Phase 4 (schedules, offline resilience, fit to window, groups, app updates, synchronized playback). See [docs/roadmap.md](docs/roadmap.md).
+Status: all planned phases built (schedules, offline resilience, fit to window, groups, app updates, synchronized playback, packaging). Hardware testing in progress; see [docs/phase0-hardware-checklist.md](docs/phase0-hardware-checklist.md). See [docs/roadmap.md](docs/roadmap.md).
 
 ## Repository layout
 
@@ -41,18 +41,19 @@ cargo run -p scenesync-sim -- --server http://127.0.0.1:8080 --name "Test window
 
 ## Run the server on a Raspberry Pi
 
+On 64-bit Raspberry Pi OS:
+
 ```sh
-# On the Pi (Raspberry Pi OS 64-bit), with Rust installed:
-cargo build --release -p scenesync-server
+curl -fsSL https://github.com/rkedward/scene-sync/releases/latest/download/install.sh | sudo sh
 ```
 
-Then follow the comments in [`deploy/scenesync.service`](deploy/scenesync.service) to run it as a service. The server advertises itself on the network as `_scenesync._tcp`, so players usually find it on their own. Give the Pi a fixed address (a DHCP reservation in your router) in case they don't.
+It installs the server as a service and prints the dashboard address and password. Run it again to update. Details, backups, logs and troubleshooting: [docs/operations.md](docs/operations.md).
 
-Recommended: fit the Pi 5 RTC battery so the Pi keeps the right time through power cuts without Internet.
+The server advertises itself on the network as `_scenesync._tcp`, so players usually find it on their own. Give the Pi a fixed address (a DHCP reservation in your router) in case they don't. Recommended: fit the Pi 5 RTC battery so the Pi keeps the right time through power cuts without Internet.
 
 ## Install the player on a projector
 
-Each CI run builds a debug APK (see the **Actions** tab, artifact `scenesync-player-debug-apk`). To build it yourself: install Android Studio or the Android SDK, then run `./gradlew :app:assembleDebug` in `android/`.
+Download `scenesync-player.apk` from the [latest release](https://github.com/rkedward/scene-sync/releases/latest). Each CI run also builds one (see the **Actions** tab, artifact `scenesync-player-debug-apk`). To build it yourself: install Android Studio or the Android SDK, then run `./gradlew :app:assembleDebug` in `android/`.
 
 Install with `adb` over the network (enable developer options and network debugging on the projector first):
 
