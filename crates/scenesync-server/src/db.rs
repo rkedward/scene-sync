@@ -32,6 +32,16 @@ pub struct Device {
     pub override_: Option<Override>,
     pub mapping: Option<Mapping>,
     pub calibrate: bool,
+    pub group_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Group {
+    pub id: String,
+    pub name: String,
+    pub schedule_id: Option<String>,
+    /// Member device IDs.
+    pub devices: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,6 +103,11 @@ CREATE TABLE IF NOT EXISTS media (
     codec TEXT,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    schedule_id TEXT
+);
 CREATE TABLE IF NOT EXISTS schedules (
     id TEXT PRIMARY KEY,
     json TEXT NOT NULL,
@@ -120,6 +135,9 @@ fn migrate(conn: &Connection) -> Result<()> {
     };
     if !has_column("devices", "schedule_id")? {
         conn.execute("ALTER TABLE devices ADD COLUMN schedule_id TEXT", [])?;
+    }
+    if !has_column("devices", "group_id")? {
+        conn.execute("ALTER TABLE devices ADD COLUMN group_id TEXT", [])?;
     }
     if !has_column("devices", "mapping_json")? {
         conn.execute("ALTER TABLE devices ADD COLUMN mapping_json TEXT", [])?;
@@ -301,7 +319,7 @@ impl Db {
         Ok(self
             .conn()
             .query_row(
-                "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id, d.mapping_json, d.calibrate
+                "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id, d.mapping_json, d.calibrate, d.group_id
                  FROM devices d LEFT JOIN schedules s ON s.id = d.schedule_id WHERE d.id = ?1",
                 params![id],
                 device_row,
@@ -312,7 +330,7 @@ impl Db {
     pub fn devices(&self) -> Result<Vec<Device>> {
         let c = self.conn();
         let mut st = c.prepare(
-            "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id, d.mapping_json, d.calibrate
+            "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id, d.mapping_json, d.calibrate, d.group_id
              FROM devices d LEFT JOIN schedules s ON s.id = d.schedule_id ORDER BY d.name",
         )?;
         let rows = st
@@ -473,6 +491,83 @@ impl Db {
             > 0)
     }
 
+    // ---- groups ----------------------------------------------------------
+
+    pub fn groups(&self) -> Result<Vec<Group>> {
+        let c = self.conn();
+        let mut st = c.prepare("SELECT id, name, schedule_id FROM groups ORDER BY name")?;
+        let mut groups = st
+            .query_map([], |r| {
+                Ok(Group {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    schedule_id: r.get(2)?,
+                    devices: Vec::new(),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut st =
+            c.prepare("SELECT id, group_id FROM devices WHERE group_id IS NOT NULL ORDER BY name")?;
+        let members = st
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (device, group) in members {
+            if let Some(g) = groups.iter_mut().find(|g| g.id == group) {
+                g.devices.push(device);
+            }
+        }
+        Ok(groups)
+    }
+
+    pub fn group(&self, id: &str) -> Result<Option<Group>> {
+        Ok(self.groups()?.into_iter().find(|g| g.id == id))
+    }
+
+    /// Creates or renames a group.
+    pub fn save_group(&self, id: &str, name: &str) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO groups (id, name) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET name = excluded.name",
+            params![id, name],
+        )?;
+        Ok(())
+    }
+
+    /// Deletes a group; its projectors keep their schedules.
+    pub fn delete_group(&self, id: &str) -> Result<bool> {
+        let c = self.conn();
+        c.execute(
+            "UPDATE devices SET group_id = NULL WHERE group_id = ?1",
+            params![id],
+        )?;
+        Ok(c.execute("DELETE FROM groups WHERE id = ?1", params![id])? > 0)
+    }
+
+    pub fn set_device_group(&self, device_id: &str, group_id: Option<&str>) -> Result<()> {
+        self.conn().execute(
+            "UPDATE devices SET group_id = ?2 WHERE id = ?1",
+            params![device_id, group_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_group_schedule(&self, id: &str, schedule_id: Option<&str>) -> Result<()> {
+        self.conn().execute(
+            "UPDATE groups SET schedule_id = ?2 WHERE id = ?1",
+            params![id, schedule_id],
+        )?;
+        Ok(())
+    }
+
+    /// Groups whose schedule is `schedule_id`.
+    pub fn schedule_groups(&self, schedule_id: &str) -> Result<Vec<String>> {
+        let c = self.conn();
+        let mut st = c.prepare("SELECT id FROM groups WHERE schedule_id = ?1")?;
+        let ids = st
+            .query_map(params![schedule_id], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ids)
+    }
+
     // ---- media -----------------------------------------------------------
 
     pub fn insert_media(&self, m: &Media) -> Result<()> {
@@ -618,6 +713,7 @@ fn device_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Device> {
         schedule_id: r.get(10)?,
         mapping: json_col(r.get(11)?),
         calibrate: r.get::<_, i64>(12)? != 0,
+        group_id: r.get(13)?,
     })
 }
 

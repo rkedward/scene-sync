@@ -33,6 +33,7 @@ Removing a device in the dashboard invalidates its token; the player gets `401` 
 | `GET /api/v1/device/config` | The device's full config (below). |
 | `GET /api/v1/media/{id}/content` | Clip bytes. Supports `Range` for resuming. |
 | `POST /api/v1/device/report` | Status report (below). |
+| `GET /api/v1/app/player.apk` | The current player APK (no auth, so it can be opened in a projector's browser for the first install). |
 | `GET /api/v1/device/ws` | WebSocket. Server sends `{"type":"config_changed","revision":N}` on connect and on every change. |
 
 ### Device config
@@ -52,9 +53,12 @@ Removing a device in the dashboard invalidates its token; the player gets `401` 
                 "issued_at": "2026-10-31T01:05:00Z", "hold": false },
   "idle": "black",
   "mapping": { "corners": [[0.30, 0.20], [0.62, 0.25], [0.60, 0.80], [0.31, 0.75]] },
-  "calibrate": false
+  "calibrate": false,
+  "app_update": { "sha256": "…", "size": 9123456, "url": "/api/v1/app/player.apk" }
 }
 ```
+
+`app_update` (optional) is the player APK every projector should run. A player compares its SHA-256 with that of its own installed package; if they differ, it downloads, verifies, and installs it (Android may ask once on screen; later updates are silent, and fully silent if the app is device owner). A release that fails to install is not retried until a different one is uploaded. Players report their package hash as `app_sha256`.
 
 `mapping` (optional) is fit to window: where the video's top-left, top-right, bottom-right and bottom-left corners land, as fractions of the projector image (0,0 is its top-left). The player warps the video onto that shape and leaves everything else black. Without it, clips are letterboxed to fill the image. `calibrate: true` asks the player to show the calibration pattern (white border, 10% grid, corners numbered 1 to 4 clockwise from top-left, and the current `mapping` outlined in orange) instead of video.
 
@@ -106,6 +110,13 @@ All under `/api/v1/admin/`, Basic auth.
 | `PUT schedules/{id}` | Create or replace a schedule (body as in "Schedule format"; `schedule_id` and `revision` are set by the server). Every projector using it gets the new version. Unknown clips or invalid rules return `400`. |
 | `DELETE schedules/{id}` | Delete a schedule. Returns `409` while a projector uses it. |
 | `GET schedules/{id}/timeline?date=YYYY-MM-DD` | What the schedule plays over one local day, as segments `{start, end, start_local, end_local, desired}` |
+| `GET groups` | Groups: `{id, name, schedule_id, devices}` |
+| `PUT groups/{id}` | Create or rename: `{"name": "Garage doors"}` |
+| `DELETE groups/{id}` | Delete a group; its projectors keep their schedules |
+| `PUT groups/{id}/schedule` | `{"schedule_id": "night" \| null}`: sets the group's schedule and gives it to every member |
+| `PUT devices/{id}/group` | `{"group_id": "garage" \| null}`: joining a group with a schedule takes that schedule |
+| `POST command` | One command for many projectors: `{"device_ids": [...] \| null (all), "action": …, "hold": false}`. All get the same override, so clips start from the same moment. |
+| `GET app`, `POST app` (multipart `file`), `DELETE app` | The player APK offered to every projector |
 | `GET pairings` | Pending pairing requests |
 | `POST pairings/approve` | `{"code": "123456", "name": "optional"}` |
 | `GET media`, `POST media` (multipart `file`), `DELETE media/{id}` | Clip library. Deleting a clip that a saved schedule or an override uses returns `409`. |

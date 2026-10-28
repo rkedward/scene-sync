@@ -480,3 +480,185 @@ async fn fit_to_window() {
         .unwrap();
     assert_eq!(res.status(), 404);
 }
+
+async fn pair(base: &str, http: &reqwest::Client, device_id: &str, code: &str) -> String {
+    let req = json!({ "device_id": device_id, "code": code, "name": device_id, "protocol_version": PROTOCOL_VERSION });
+    http.post(format!("{base}/api/v1/pair"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    let res = http
+        .post(format!("{base}/api/v1/admin/pairings/approve"))
+        .basic_auth("admin", Some("secret"))
+        .json(&json!({ "code": code }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success());
+    let r: PairResponse = http
+        .post(format!("{base}/api/v1/pair"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    r.token.unwrap()
+}
+
+#[tokio::test]
+async fn groups_bulk_commands_and_app_updates() {
+    let (base, _dir) = start().await;
+    let http = reqwest::Client::new();
+    let admin = |rb: reqwest::RequestBuilder| rb.basic_auth("admin", Some("secret"));
+    let t1 = pair(&base, &http, "left", "100001").await;
+    let t2 = pair(&base, &http, "right", "100002").await;
+    let _t3 = pair(&base, &http, "porch", "100003").await;
+    let config = |token: String| {
+        let http = http.clone();
+        let base = base.clone();
+        async move {
+            http.get(format!("{base}/api/v1/device/config"))
+                .bearer_auth(token)
+                .send()
+                .await
+                .unwrap()
+                .json::<DeviceConfig>()
+                .await
+                .unwrap()
+        }
+    };
+
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(vec![3u8; 2000]).file_name("skeleton.mp4"),
+    );
+    admin(http.post(format!("{base}/api/v1/admin/media")))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    admin(http.put(format!("{base}/api/v1/admin/schedules/night")))
+        .json(&json!({ "schedule_id": "night", "revision": 0, "timezone": "UTC", "rules": [
+            { "id": "s", "start": "18:00", "end": "23:00", "action": { "type": "loop", "media_id": "skeleton" } } ] }))
+        .send()
+        .await
+        .unwrap();
+
+    // A group with a schedule; members get it, including ones that join later.
+    let res = admin(http.put(format!("{base}/api/v1/admin/groups/garage")))
+        .json(&json!({ "name": "Garage doors" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let res = admin(http.put(format!("{base}/api/v1/admin/devices/left/group")))
+        .json(&json!({ "group_id": "garage" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    let res = admin(http.put(format!("{base}/api/v1/admin/groups/garage/schedule")))
+        .json(&json!({ "schedule_id": "night" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    admin(http.put(format!("{base}/api/v1/admin/devices/right/group")))
+        .json(&json!({ "group_id": "garage" }))
+        .send()
+        .await
+        .unwrap();
+    for t in [&t1, &t2] {
+        let c = config(t.clone()).await;
+        assert_eq!(c.schedule.unwrap().schedule_id, "night");
+        assert_eq!(c.media[0].media_id, "skeleton");
+    }
+    let groups: serde_json::Value = admin(http.get(format!("{base}/api/v1/admin/groups")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(groups[0]["devices"], json!(["left", "right"]));
+    // The schedule can't be deleted while the group uses it.
+    let res = admin(http.delete(format!("{base}/api/v1/admin/schedules/night")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 409);
+
+    // One command for the group: both get the same override.
+    let res: serde_json::Value = admin(http.post(format!("{base}/api/v1/admin/command")))
+        .json(&json!({ "device_ids": ["left", "right"], "action": { "type": "play", "media_id": "skeleton", "loop": false } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(res["devices"], 2);
+    let (c1, c2) = (config(t1.clone()).await, config(t2.clone()).await);
+    assert_eq!(c1.override_, c2.override_);
+    assert!(c1.override_.is_some());
+    // Everyone back to schedule.
+    let res: serde_json::Value = admin(http.post(format!("{base}/api/v1/admin/command")))
+        .json(&json!({ "device_ids": null, "action": null }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(res["devices"], 3);
+    assert!(config(t1.clone()).await.override_.is_none());
+
+    // App updates: a non-APK is refused; an APK is offered to every player.
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(b"hello".to_vec()).file_name("x.apk"),
+    );
+    let res = admin(http.post(format!("{base}/api/v1/admin/app")))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    let mut apk = b"PK\x03\x04".to_vec();
+    apk.extend(vec![0u8; 5000]);
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(apk.clone()).file_name("scenesync-player.apk"),
+    );
+    let before = config(t1.clone()).await.revision;
+    let res = admin(http.post(format!("{base}/api/v1/admin/app")))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let c = config(t1.clone()).await;
+    assert!(c.revision > before);
+    let rel = c.app_update.unwrap();
+    assert_eq!(rel.size, apk.len() as u64);
+    let body = http
+        .get(format!("{base}{}", rel.url))
+        .send()
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    assert_eq!(body.as_ref(), apk.as_slice());
+
+    // Deleting the group keeps members' schedules.
+    let res = admin(http.delete(format!("{base}/api/v1/admin/groups/garage")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    assert!(config(t2).await.schedule.is_some());
+}

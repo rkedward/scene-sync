@@ -79,6 +79,9 @@
 
   <section>
     <h2>Projectors</h2>
+    <div class="bulk row" data-target="all" style="margin-bottom:12px">
+      <strong>All projectors</strong>
+    </div>
     <div id="devices" class="devices"><p class="muted">Loading…</p></div>
   </section>
 
@@ -114,6 +117,16 @@
       <button class="primary" id="fit-done">Done</button>
       <span class="hint" id="fit-status"></span>
     </div>
+  </section>
+
+  <section id="groups-section">
+    <h2>Groups</h2>
+    <p class="muted">A group is a set of projectors that share a schedule and take commands together, like the garage doors or the upstairs windows.</p>
+    <div id="groups" class="devices"></div>
+    <form class="row" id="group-form" style="margin-top:12px">
+      <input type="text" id="group-name" placeholder="New group name" required>
+      <button type="submit">Add group</button>
+    </form>
   </section>
 
   <section id="schedules">
@@ -170,11 +183,22 @@
       </table>
     </div>
   </section>
+  <section id="app-section">
+    <h2>Player app</h2>
+    <p class="muted">Upload a SceneSync Player APK and every projector installs it. The first time, the projector may ask you to press Install with the remote; after that, updates install on their own.</p>
+    <div id="app-info" class="muted">No app uploaded.</div>
+    <div class="row" style="margin-top:8px">
+      <input type="file" id="apk-file" accept=".apk,application/vnd.android.package-archive">
+      <button class="primary" id="apk-upload">Upload APK</button>
+      <progress id="apk-progress" max="1" value="0" hidden></progress>
+      <button class="danger" id="apk-remove" hidden>Stop offering</button>
+    </div>
+  </section>
 </main>
 <div id="toast"></div>
 
 <script>
-const state = { devices: [], media: [], pending: [], schedules: [] };
+const state = { devices: [], media: [], pending: [], schedules: [], groups: [], app: null };
 const $ = (id) => document.getElementById(id);
 
 function toast(msg) {
@@ -272,12 +296,14 @@ function renderDevices() {
         <dt>Storage</dt><dd>${space}</dd>
         <dt>Clips</dt><dd>${d.media.map(esc).join(", ") || "none"}</dd>
         <dt>Fit</dt><dd>${d.calibrate ? '<span class="warn">showing pattern</span>' : d.mapping ? "fitted to window" : "full frame"}</dd>
-        <dt>Model</dt><dd>${esc(d.model || "–")} · app ${esc(d.app_version || "–")}</dd>
+        <dt>Model</dt><dd>${esc(d.model || "–")} · app ${esc(d.app_version || "–")}${appStatus(r)}</dd>
         ${errors}
       </dl>
       <div class="row">
         <label class="muted">Schedule</label>
         <select data-schedule>${schedOptions(d.schedule_id)}</select>
+        <label class="muted">Group</label>
+        <select data-group>${groupOptions(d.group_id)}</select>
       </div>
       <div class="row">
         <select data-clip>${options}</select>
@@ -658,17 +684,153 @@ $("fit-done").addEventListener("click", async () => {
   } catch (err) { toast(err.message); }
 });
 
+// ---- Groups, bulk commands, app updates ----
+function groupOptions(current) {
+  return ['<option value="">No group</option>'].concat(state.groups.map((g) =>
+    `<option value="${esc(g.id)}" ${g.id === current ? "selected" : ""}>${esc(g.name)}</option>`)).join("");
+}
+
+function appStatus(r) {
+  if (!state.app || !r.app_sha256) return "";
+  return r.app_sha256 === state.app.sha256 ? ' <span class="ok">(latest)</span>' : ' <span class="warn">(update pending)</span>';
+}
+
+function bulkControls() {
+  const options = state.media.map((m) => `<option value="${esc(m.id)}">${esc(m.id)}</option>`).join("");
+  return `<select data-bclip>${options}</select>
+    <button data-bcmd="once">Play once</button><button data-bcmd="loop" class="primary">Loop</button>
+    <button data-bcmd="stop">Black</button><button data-bcmd="clear">Return to schedule</button>
+    <label class="muted"><input type="checkbox" data-bhold> Hold</label>`;
+}
+
+function renderBulk() {
+  document.querySelectorAll('.bulk[data-target="all"]').forEach((el) => {
+    const keep = el.querySelector("[data-bclip]")?.value;
+    el.innerHTML = `<strong>All projectors</strong> ${bulkControls()}`;
+    if (keep) el.querySelector("[data-bclip]").value = keep;
+  });
+}
+
+function renderGroups() {
+  const names = Object.fromEntries(state.devices.map((d) => [d.id, d.name]));
+  const picked = {};
+  document.querySelectorAll("#groups .bulk").forEach((el) => (picked[el.dataset.target] = el.querySelector("[data-bclip]")?.value));
+  $("groups").innerHTML = state.groups.map((g) => `<div class="device" data-group-id="${esc(g.id)}">
+      <h3>${esc(g.name)}</h3>
+      <dl class="kv"><dt>Projectors</dt><dd>${g.devices.map((id) => esc(names[id] || id)).join(", ") || '<span class="muted">none yet; pick this group on a projector card</span>'}</dd></dl>
+      <div class="row"><label class="muted">Schedule</label><select data-group-schedule>${schedOptions(g.schedule_id)}</select></div>
+      <div class="bulk row" data-target="${esc(g.id)}">${bulkControls()}</div>
+      <div class="row"><button data-group-rename>Rename</button><button class="danger" data-group-delete>Delete</button></div>
+    </div>`).join("") || '<p class="muted">No groups yet.</p>';
+  document.querySelectorAll("#groups .bulk").forEach((el) => {
+    if (picked[el.dataset.target]) el.querySelector("[data-bclip]").value = picked[el.dataset.target];
+  });
+}
+
+function renderApp() {
+  const a = state.app;
+  $("app-info").innerHTML = a
+    ? `Offering <b>${esc(a.filename)}</b> (${bytes(a.size)}, uploaded ${esc(new Date(a.uploaded_at).toLocaleString())}, <code>${esc(a.sha256.slice(0, 12))}</code>)`
+    : "No app uploaded. Projectors keep the version they have.";
+  $("apk-remove").hidden = !a;
+}
+
+document.addEventListener("click", async (e) => {
+  const cmd = e.target.dataset?.bcmd; if (!cmd) return;
+  const bar = e.target.closest(".bulk"); const target = bar.dataset.target;
+  const clip = bar.querySelector("[data-bclip]").value, hold = bar.querySelector("[data-bhold]").checked;
+  let action = null;
+  if (cmd === "once" || cmd === "loop") {
+    if (!clip) return toast("Upload a clip first.");
+    action = { type: "play", media_id: clip, loop: cmd === "loop" };
+  } else if (cmd === "stop") action = { type: "stop" };
+  let device_ids = null;
+  if (target !== "all") {
+    device_ids = state.groups.find((g) => g.id === target)?.devices || [];
+    if (!device_ids.length) return toast("This group has no projectors yet.");
+  }
+  try {
+    const r = await api("POST", "/api/v1/admin/command", { device_ids, action, hold });
+    toast(`Sent to ${r.devices} projector${r.devices === 1 ? "" : "s"}.`);
+    refresh();
+  } catch (err) { toast(err.message); }
+});
+
+$("group-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = $("group-name").value.trim(); if (!name) return;
+  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "group";
+  let id = base, n = 2;
+  while (state.groups.some((g) => g.id === id)) id = `${base}-${n++}`;
+  try { await api("PUT", `/api/v1/admin/groups/${encodeURIComponent(id)}`, { name }); $("group-name").value = ""; refresh(); }
+  catch (err) { toast(err.message); }
+});
+
+$("groups").addEventListener("click", async (e) => {
+  const card = e.target.closest("[data-group-id]"); if (!card) return;
+  const id = card.dataset.groupId, g = state.groups.find((x) => x.id === id);
+  try {
+    if (e.target.dataset.groupRename !== undefined) {
+      const name = prompt("New name", g?.name || ""); if (!name) return;
+      await api("PUT", `/api/v1/admin/groups/${encodeURIComponent(id)}`, { name });
+    } else if (e.target.dataset.groupDelete !== undefined) {
+      if (!confirm(`Delete group ${g?.name}? Its projectors keep their schedules.`)) return;
+      await api("DELETE", `/api/v1/admin/groups/${encodeURIComponent(id)}`);
+    } else return;
+    refresh();
+  } catch (err) { toast(err.message); }
+});
+
+$("groups").addEventListener("change", async (e) => {
+  if (e.target.dataset.groupSchedule === undefined) return;
+  const id = e.target.closest("[data-group-id]").dataset.groupId;
+  try {
+    await api("PUT", `/api/v1/admin/groups/${encodeURIComponent(id)}/schedule`, { schedule_id: e.target.value || null });
+    e.target.blur(); toast("Schedule sent to the group."); refresh();
+  } catch (err) { toast(err.message); }
+});
+
+$("devices").addEventListener("change", async (e) => {
+  if (e.target.dataset.group === undefined) return;
+  const id = e.target.closest(".device").dataset.id;
+  try {
+    await api("PUT", `/api/v1/admin/devices/${encodeURIComponent(id)}/group`, { group_id: e.target.value || null });
+    e.target.blur(); refresh();
+  } catch (err) { toast(err.message); }
+});
+
+$("apk-upload").addEventListener("click", () => {
+  const f = $("apk-file").files[0]; if (!f) return toast("Choose an APK first.");
+  const form = new FormData(); form.append("file", f, f.name);
+  const xhr = new XMLHttpRequest(); const bar = $("apk-progress");
+  bar.hidden = false; bar.value = 0; $("apk-upload").disabled = true;
+  xhr.upload.onprogress = (ev) => { if (ev.lengthComputable) bar.value = ev.loaded / ev.total; };
+  xhr.onloadend = () => {
+    bar.hidden = true; $("apk-upload").disabled = false;
+    if (xhr.status >= 200 && xhr.status < 300) { $("apk-file").value = ""; toast("Uploaded. Projectors will update."); refresh(); }
+    else { let m = xhr.statusText; try { m = JSON.parse(xhr.responseText).error; } catch {} toast("Upload failed: " + m); }
+  };
+  xhr.open("POST", "/api/v1/admin/app"); xhr.send(form);
+});
+
+$("apk-remove").addEventListener("click", async () => {
+  if (!confirm("Stop offering this app? Projectors keep what they have installed.")) return;
+  try { await api("DELETE", "/api/v1/admin/app"); refresh(); } catch (err) { toast(err.message); }
+});
+
 async function refresh() {
   try {
-    const [devices, media, pending, schedules] = await Promise.all([
+    const [devices, media, pending, schedules, groups, app] = await Promise.all([
       api("GET", "/api/v1/admin/devices"), api("GET", "/api/v1/admin/media"), api("GET", "/api/v1/admin/pairings"),
-      api("GET", "/api/v1/admin/schedules"),
+      api("GET", "/api/v1/admin/schedules"), api("GET", "/api/v1/admin/groups"), api("GET", "/api/v1/admin/app"),
     ]);
     // Keep the user's clip selection while re-rendering.
     const picked = {};
     document.querySelectorAll(".device").forEach((el) => (picked[el.dataset.id] = el.querySelector("[data-clip]")?.value));
-    Object.assign(state, { devices, media, pending, schedules });
-    renderPending(); renderMedia(); renderSchedules();
+    Object.assign(state, { devices, media, pending, schedules, groups, app });
+    renderPending(); renderMedia(); renderSchedules(); renderApp();
+    const busy = document.activeElement?.tagName === "SELECT" ? document.activeElement : null;
+    if (!busy || !busy.closest(".bulk, #groups")) { renderBulk(); renderGroups(); }
     if (!$("fit").hidden) renderFitPattern();
     // Don't redraw the cards while a dropdown on them is open.
     const focused = document.activeElement;
