@@ -261,6 +261,17 @@ async fn update_config(p: &Player) -> Result<()> {
     // Every clip is present: apply atomically.
     write_json(&p.args.state_dir.join("config.json"), &cfg).await?;
     println!("Applied config revision {}", cfg.revision);
+    if cfg.calibrate {
+        println!("  Showing the calibration pattern (fit to window)");
+    }
+    if let Some(m) = &cfg.mapping {
+        let pts: Vec<String> = m
+            .corners
+            .iter()
+            .map(|[x, y]| format!("({x:.3}, {y:.3})"))
+            .collect();
+        println!("  Fit to window: corners {}", pts.join(" "));
+    }
     *p.config.lock().await = Some(cfg);
     *p.last_error.lock().await = None;
     garbage_collect(p).await;

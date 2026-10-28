@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
-use scenesync_core::protocol::DeviceReport;
+use scenesync_core::protocol::{DeviceReport, Mapping};
 use scenesync_core::schedule::{Override, Schedule};
 use serde::Serialize;
 
@@ -30,6 +30,8 @@ pub struct Device {
     pub schedule_id: Option<String>,
     #[serde(rename = "override")]
     pub override_: Option<Override>,
+    pub mapping: Option<Mapping>,
+    pub calibrate: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -118,6 +120,15 @@ fn migrate(conn: &Connection) -> Result<()> {
     };
     if !has_column("devices", "schedule_id")? {
         conn.execute("ALTER TABLE devices ADD COLUMN schedule_id TEXT", [])?;
+    }
+    if !has_column("devices", "mapping_json")? {
+        conn.execute("ALTER TABLE devices ADD COLUMN mapping_json TEXT", [])?;
+    }
+    if !has_column("devices", "calibrate")? {
+        conn.execute(
+            "ALTER TABLE devices ADD COLUMN calibrate INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
     }
     Ok(())
 }
@@ -290,7 +301,7 @@ impl Db {
         Ok(self
             .conn()
             .query_row(
-                "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id
+                "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id, d.mapping_json, d.calibrate
                  FROM devices d LEFT JOIN schedules s ON s.id = d.schedule_id WHERE d.id = ?1",
                 params![id],
                 device_row,
@@ -301,7 +312,7 @@ impl Db {
     pub fn devices(&self) -> Result<Vec<Device>> {
         let c = self.conn();
         let mut st = c.prepare(
-            "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id
+            "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id, d.mapping_json, d.calibrate
              FROM devices d LEFT JOIN schedules s ON s.id = d.schedule_id ORDER BY d.name",
         )?;
         let rows = st
@@ -362,6 +373,25 @@ impl Db {
         self.conn().execute(
             "UPDATE devices SET override_json = ?2 WHERE id = ?1",
             params![id, json],
+        )?;
+        self.bump_revision(id)
+    }
+
+    /// Sets or clears the fit-to-window mapping. Returns the new revision.
+    pub fn set_mapping(&self, id: &str, mapping: Option<&Mapping>) -> Result<Option<u64>> {
+        let json = mapping.map(serde_json::to_string).transpose()?;
+        self.conn().execute(
+            "UPDATE devices SET mapping_json = ?2 WHERE id = ?1",
+            params![id, json],
+        )?;
+        self.bump_revision(id)
+    }
+
+    /// Turns the calibration pattern on or off. Returns the new revision.
+    pub fn set_calibrate(&self, id: &str, on: bool) -> Result<Option<u64>> {
+        self.conn().execute(
+            "UPDATE devices SET calibrate = ?2 WHERE id = ?1",
+            params![id, on as i64],
         )?;
         self.bump_revision(id)
     }
@@ -586,6 +616,8 @@ fn device_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Device> {
         schedule: json_col(r.get(8)?),
         override_: json_col(r.get(9)?),
         schedule_id: r.get(10)?,
+        mapping: json_col(r.get(11)?),
+        calibrate: r.get::<_, i64>(12)? != 0,
     })
 }
 

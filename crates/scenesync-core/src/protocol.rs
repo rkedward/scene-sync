@@ -77,6 +77,52 @@ pub struct DeviceConfig {
     pub override_: Option<Override>,
     #[serde(default)]
     pub idle: IdleMode,
+    /// Fit to window: where the corners of the video land on the projector
+    /// image. None = full frame, as the projector shows it normally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mapping: Option<Mapping>,
+    /// Show the calibration pattern instead of video (used while fitting).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub calibrate: bool,
+}
+
+/// A four-corner warp. `corners` are the top-left, top-right, bottom-right
+/// and bottom-left corners of the video, as fractions of the projector
+/// image (0,0 = top-left of the image, 1,1 = bottom-right). Everything
+/// outside the shape is black.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Mapping {
+    pub corners: [[f64; 2]; 4],
+}
+
+impl Mapping {
+    /// Corners must be finite, roughly on screen, and form a convex shape in
+    /// clockwise order (as seen on the wall).
+    pub fn validate(&self) -> Result<(), String> {
+        for [x, y] in self.corners {
+            if !x.is_finite()
+                || !y.is_finite()
+                || !(-0.5..=1.5).contains(&x)
+                || !(-0.5..=1.5).contains(&y)
+            {
+                return Err("corners must be between -0.5 and 1.5".into());
+            }
+        }
+        // With y pointing down, clockwise order gives positive cross products.
+        let c = self.corners;
+        for i in 0..4 {
+            let [ax, ay] = c[i];
+            let [bx, by] = c[(i + 1) % 4];
+            let [cx, cy] = c[(i + 2) % 4];
+            let cross = (bx - ax) * (cy - by) - (by - ay) * (cx - bx);
+            if cross <= 1e-6 {
+                return Err(
+                    "corners must form a convex shape in order top-left, top-right, bottom-right, bottom-left".into(),
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 /// `GET /api/v1/time` — used for NTP-style clock offset estimation.
@@ -127,4 +173,33 @@ pub struct DeviceReport {
 pub enum ServerMessage {
     /// A new config revision exists; fetch it over HTTP.
     ConfigChanged { revision: u64 },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Mapping;
+
+    #[test]
+    fn mapping_validation() {
+        let full = Mapping {
+            corners: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        };
+        assert!(full.validate().is_ok());
+        let window = Mapping {
+            corners: [[0.3, 0.2], [0.62, 0.25], [0.6, 0.8], [0.31, 0.75]],
+        };
+        assert!(window.validate().is_ok());
+        let backwards = Mapping {
+            corners: [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]],
+        };
+        assert!(backwards.validate().is_err());
+        let bowtie = Mapping {
+            corners: [[0.0, 0.0], [1.0, 1.0], [1.0, 0.0], [0.0, 1.0]],
+        };
+        assert!(bowtie.validate().is_err());
+        let far = Mapping {
+            corners: [[0.0, 0.0], [3.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        };
+        assert!(far.validate().is_err());
+    }
 }

@@ -1,11 +1,13 @@
 package dev.scenesync.player
 
 import android.content.Intent
+import android.graphics.Matrix
 import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.KeyEvent
+import android.view.TextureView
 import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
@@ -21,9 +23,10 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
 import dev.scenesync.engine.Desired
+import dev.scenesync.engine.Mapping
 import dev.scenesync.engine.PlaybackKey
 import dev.scenesync.engine.ResumePolicy
 import dev.scenesync.engine.evaluate
@@ -38,13 +41,16 @@ import java.time.Duration
 class MainActivity : ComponentActivity() {
     private lateinit var controller: Controller
     private lateinit var player: ExoPlayer
-    private lateinit var playerView: PlayerView
+    private lateinit var videoView: TextureView
+    private lateinit var calibrationView: CalibrationView
     private lateinit var overlay: View
     private lateinit var codeView: TextView
     private lateinit var statusView: TextView
     private lateinit var serverInput: EditText
 
-    private var shown: Desired = Desired.Idle()
+    /** What is on screen; null forces the next tick to switch (e.g. after calibration). */
+    private var shown: Desired? = null
+    private var appliedMapping: Mapping? = null
     private var current: PlaybackKey? = null
     private var overlayUntil = 0L
     private val backPresses = ArrayDeque<Long>()
@@ -56,15 +62,25 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemBars()
 
-        playerView = findViewById(R.id.player_view)
+        videoView = findViewById(R.id.video_view)
+        calibrationView = findViewById(R.id.calibration)
         overlay = findViewById(R.id.overlay)
         codeView = findViewById(R.id.code)
         statusView = findViewById(R.id.status)
         serverInput = findViewById(R.id.server_input)
 
         player = ExoPlayer.Builder(this).build()
-        playerView.player = player
+        player.setVideoTextureView(videoView)
+        videoView.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyTransform() }
         player.addListener(object : Player.Listener {
+            override fun onVideoSizeChanged(videoSize: VideoSize) = applyTransform()
+
+            // Stay black until the new clip's first frame, so the last frame of
+            // the previous clip never flashes.
+            override fun onRenderedFirstFrame() {
+                videoView.visibility = View.VISIBLE
+            }
+
             override fun onPlayerError(error: PlaybackException) {
                 controller.reportError("Playback error: ${error.errorCodeName} ${error.message ?: ""}")
             }
@@ -116,6 +132,24 @@ class MainActivity : ComponentActivity() {
 
     private fun tick() {
         val cfg = controller.config.value
+        if (cfg?.mapping != appliedMapping) {
+            appliedMapping = cfg?.mapping
+            applyTransform()
+        }
+        if (cfg?.calibrate == true) {
+            calibrationView.mapping = cfg.mapping
+            calibrationView.label = cfg.name
+            if (calibrationView.visibility != View.VISIBLE) {
+                calibrationView.visibility = View.VISIBLE
+                showBlack()
+                shown = null
+                current = null
+                controller.nowPlaying.value = Desired.Idle("calibration")
+            }
+            return
+        }
+        calibrationView.visibility = View.GONE
+
         val now = controller.clock.now()
         val durations = cfg?.media?.mapNotNull { m -> m.durationMs?.let { m.mediaId to it } }?.toMap() ?: emptyMap()
         val desired = evaluate(cfg?.schedule, cfg?.override, durations, now, current)
@@ -124,6 +158,36 @@ class MainActivity : ComponentActivity() {
         shown = desired
         current = desired.key
         controller.nowPlaying.value = desired
+    }
+
+    /**
+     * Maps the video onto the screen. TextureView stretches the video over the
+     * whole view, so the transform takes the view's corners to either the
+     * letterboxed rectangle (no mapping) or the four fit-to-window corners.
+     */
+    private fun applyTransform() {
+        val w = videoView.width.toFloat()
+        val h = videoView.height.toFloat()
+        if (w <= 0f || h <= 0f) return
+        val dst = appliedMapping?.corners?.takeIf { it.size == 4 && it.all { p -> p.size == 2 } }
+            ?.flatMap { p -> listOf((p[0] * w).toFloat(), (p[1] * h).toFloat()) }
+            ?.toFloatArray()
+            ?: letterbox(w, h)
+        val src = floatArrayOf(0f, 0f, w, 0f, w, h, 0f, h)
+        val m = Matrix()
+        if (!m.setPolyToPoly(src, 0, dst, 0, 4)) m.reset()
+        videoView.setTransform(m)
+        videoView.invalidate()
+    }
+
+    private fun letterbox(w: Float, h: Float): FloatArray {
+        val v = player.videoSize
+        if (v.width <= 0 || v.height <= 0) return floatArrayOf(0f, 0f, w, 0f, w, h, 0f, h)
+        val aspect = v.width * v.pixelWidthHeightRatio / v.height
+        val (bw, bh) = if (w / h > aspect) Pair(h * aspect, h) else Pair(w, w / aspect)
+        val x = (w - bw) / 2
+        val y = (h - bh) / 2
+        return floatArrayOf(x, y, x + bw, y, x + bw, y + bh, x, y + bh)
     }
 
     private fun show(desired: Desired, now: java.time.Instant, durations: Map<String, Long>) {
@@ -143,11 +207,11 @@ class MainActivity : ComponentActivity() {
                     desired.resume == ResumePolicy.CONTINUE && duration != null && duration > 0 -> sinceStart % duration
                     else -> 0L
                 }
+                videoView.visibility = View.INVISIBLE
                 player.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)), startMs)
                 player.repeatMode = if (desired.looping) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
                 player.prepare()
                 player.playWhenReady = true
-                playerView.visibility = View.VISIBLE
             }
         }
     }
@@ -155,7 +219,7 @@ class MainActivity : ComponentActivity() {
     private fun showBlack() {
         player.stop()
         player.clearMediaItems()
-        playerView.visibility = View.INVISIBLE
+        videoView.visibility = View.INVISIBLE
     }
 
     private fun renderStatus() {
@@ -169,6 +233,7 @@ class MainActivity : ComponentActivity() {
         codeView.visibility = if (s.code != null) View.VISIBLE else View.GONE
         codeView.text = s.code ?: ""
         val nowText = when (val d = shown) {
+            null -> if (controller.config.value?.calibrate == true) "Showing: calibration pattern" else "Showing: black"
             is Desired.Idle -> "Showing: black"
             is Desired.Play -> "Showing: ${d.mediaId}${if (d.looping) " (loop)" else ""}"
         }

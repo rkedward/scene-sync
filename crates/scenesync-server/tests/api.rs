@@ -390,3 +390,93 @@ async fn shared_schedules() {
         .unwrap();
     assert_eq!(res.status(), 204);
 }
+
+#[tokio::test]
+async fn fit_to_window() {
+    let (base, _dir) = start().await;
+    let http = reqwest::Client::new();
+    let admin = |rb: reqwest::RequestBuilder| rb.basic_auth("admin", Some("secret"));
+
+    let pair_req = json!({ "device_id": "dev-3", "code": "111222", "name": "Garage", "protocol_version": PROTOCOL_VERSION });
+    http.post(format!("{base}/api/v1/pair"))
+        .json(&pair_req)
+        .send()
+        .await
+        .unwrap();
+    admin(http.post(format!("{base}/api/v1/admin/pairings/approve")))
+        .json(&json!({ "code": "111222" }))
+        .send()
+        .await
+        .unwrap();
+    let r: PairResponse = http
+        .post(format!("{base}/api/v1/pair"))
+        .json(&pair_req)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token = r.token.unwrap();
+    let config = || async {
+        http.get(format!("{base}/api/v1/device/config"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .json::<DeviceConfig>()
+            .await
+            .unwrap()
+    };
+    let before = config().await;
+    assert!(before.mapping.is_none() && !before.calibrate);
+
+    // Pattern on.
+    let res = admin(http.put(format!("{base}/api/v1/admin/devices/dev-3/calibrate")))
+        .json(&json!({ "on": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    let c = config().await;
+    assert!(c.calibrate);
+    assert!(c.revision > before.revision);
+
+    // A bow-tie shape is rejected; a window shape is stored.
+    let res = admin(http.put(format!("{base}/api/v1/admin/devices/dev-3/mapping")))
+        .json(&json!({ "mapping": { "corners": [[0,0],[1,1],[1,0],[0,1]] } }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    let corners = [[0.3, 0.2], [0.62, 0.25], [0.6, 0.8], [0.31, 0.75]];
+    let res = admin(http.put(format!("{base}/api/v1/admin/devices/dev-3/mapping")))
+        .json(&json!({ "mapping": { "corners": corners } }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    assert_eq!(config().await.mapping.unwrap().corners, corners);
+
+    // Pattern off, mapping cleared.
+    admin(http.put(format!("{base}/api/v1/admin/devices/dev-3/calibrate")))
+        .json(&json!({ "on": false }))
+        .send()
+        .await
+        .unwrap();
+    admin(http.put(format!("{base}/api/v1/admin/devices/dev-3/mapping")))
+        .json(&json!({ "mapping": null }))
+        .send()
+        .await
+        .unwrap();
+    let c = config().await;
+    assert!(c.mapping.is_none() && !c.calibrate);
+
+    // Unknown device.
+    let res = admin(http.put(format!("{base}/api/v1/admin/devices/nope/calibrate")))
+        .json(&json!({ "on": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 404);
+}
