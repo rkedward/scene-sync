@@ -25,7 +25,9 @@ pub struct Device {
     pub last_seen: Option<DateTime<Utc>>,
     pub revision: u64,
     pub report: Option<DeviceReport>,
+    /// The assigned schedule, resolved from `schedule_id`.
     pub schedule: Option<Schedule>,
+    pub schedule_id: Option<String>,
     #[serde(rename = "override")]
     pub override_: Option<Override>,
 }
@@ -89,6 +91,11 @@ CREATE TABLE IF NOT EXISTS media (
     codec TEXT,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS schedules (
+    id TEXT PRIMARY KEY,
+    json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS device_media (
     device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
     media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
@@ -98,6 +105,21 @@ CREATE TABLE IF NOT EXISTS device_media (
 
 fn json_col<T: serde::de::DeserializeOwned>(s: Option<String>) -> Option<T> {
     s.and_then(|s| serde_json::from_str(&s).ok())
+}
+
+/// Additive migrations for databases created by earlier versions.
+fn migrate(conn: &Connection) -> Result<()> {
+    let has_column = |table: &str, column: &str| -> rusqlite::Result<bool> {
+        let mut st = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let names = st
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(names.iter().any(|n| n == column))
+    };
+    if !has_column("devices", "schedule_id")? {
+        conn.execute("ALTER TABLE devices ADD COLUMN schedule_id TEXT", [])?;
+    }
+    Ok(())
 }
 
 fn time_col(s: String) -> DateTime<Utc> {
@@ -110,6 +132,7 @@ impl Db {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         Ok(Db {
             conn: Mutex::new(conn),
         })
@@ -267,8 +290,8 @@ impl Db {
         Ok(self
             .conn()
             .query_row(
-                "SELECT id, name, model, app_version, paired_at, last_seen, revision, report_json, schedule_json, override_json
-                 FROM devices WHERE id = ?1",
+                "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id
+                 FROM devices d LEFT JOIN schedules s ON s.id = d.schedule_id WHERE d.id = ?1",
                 params![id],
                 device_row,
             )
@@ -278,8 +301,8 @@ impl Db {
     pub fn devices(&self) -> Result<Vec<Device>> {
         let c = self.conn();
         let mut st = c.prepare(
-            "SELECT id, name, model, app_version, paired_at, last_seen, revision, report_json, schedule_json, override_json
-             FROM devices ORDER BY name",
+            "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id
+             FROM devices d LEFT JOIN schedules s ON s.id = d.schedule_id ORDER BY d.name",
         )?;
         let rows = st
             .query_map([], device_row)?
@@ -343,13 +366,81 @@ impl Db {
         self.bump_revision(id)
     }
 
-    pub fn set_schedule(&self, id: &str, schedule: Option<&Schedule>) -> Result<Option<u64>> {
-        let json = schedule.map(serde_json::to_string).transpose()?;
+    /// Assigns a schedule (or none) to a device. Returns the new revision.
+    pub fn set_device_schedule(&self, id: &str, schedule_id: Option<&str>) -> Result<Option<u64>> {
         self.conn().execute(
-            "UPDATE devices SET schedule_json = ?2 WHERE id = ?1",
-            params![id, json],
+            "UPDATE devices SET schedule_id = ?2 WHERE id = ?1",
+            params![id, schedule_id],
         )?;
         self.bump_revision(id)
+    }
+
+    // ---- schedules -------------------------------------------------------
+
+    pub fn schedules(&self) -> Result<Vec<Schedule>> {
+        let c = self.conn();
+        let mut st = c.prepare("SELECT json FROM schedules ORDER BY id")?;
+        let rows = st
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|j| serde_json::from_str(&j).ok())
+            .collect())
+    }
+
+    pub fn schedule(&self, id: &str) -> Result<Option<Schedule>> {
+        let json: Option<String> = self
+            .conn()
+            .query_row(
+                "SELECT json FROM schedules WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(json.and_then(|j| serde_json::from_str(&j).ok()))
+    }
+
+    /// Creates or replaces a schedule, giving it the next revision number.
+    /// Returns the stored schedule and the devices that use it.
+    pub fn save_schedule(&self, mut schedule: Schedule) -> Result<(Schedule, Vec<String>)> {
+        let previous = self
+            .schedule(&schedule.schedule_id)?
+            .map(|s| s.revision)
+            .unwrap_or(0);
+        schedule.revision = previous + 1;
+        let json = serde_json::to_string(&schedule)?;
+        let users = {
+            let c = self.conn();
+            c.execute(
+                "INSERT INTO schedules (id, json, updated_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(id) DO UPDATE SET json = ?2, updated_at = ?3",
+                params![schedule.schedule_id, json, Utc::now().to_rfc3339()],
+            )?;
+            let mut st = c.prepare("SELECT id FROM devices WHERE schedule_id = ?1")?;
+            let ids = st
+                .query_map(params![schedule.schedule_id], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            ids
+        };
+        Ok((schedule, users))
+    }
+
+    /// Devices using a schedule.
+    pub fn schedule_users(&self, id: &str) -> Result<Vec<String>> {
+        let c = self.conn();
+        let mut st = c.prepare("SELECT id FROM devices WHERE schedule_id = ?1")?;
+        let ids = st
+            .query_map(params![id], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ids)
+    }
+
+    pub fn delete_schedule(&self, id: &str) -> Result<bool> {
+        Ok(self
+            .conn()
+            .execute("DELETE FROM schedules WHERE id = ?1", params![id])?
+            > 0)
     }
 
     // ---- media -----------------------------------------------------------
@@ -494,6 +585,7 @@ fn device_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Device> {
         report: json_col(r.get(7)?),
         schedule: json_col(r.get(8)?),
         override_: json_col(r.get(9)?),
+        schedule_id: r.get(10)?,
     })
 }
 

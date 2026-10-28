@@ -1415,6 +1415,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
+ "chrono-tz",
  "futures-util",
  "hex",
  "mdns-sd",
@@ -1439,6 +1440,7 @@ name = "scenesync-sim"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "chrono",
  "clap",
  "futures-util",
@@ -1446,9 +1448,11 @@ dependencies = [
  "rand 0.9.5",
  "reqwest",
  "scenesync-core",
+ "scenesync-server",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "tokio",
  "tokio-tungstenite 0.27.0",
 ]

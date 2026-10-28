@@ -18,8 +18,8 @@
   header { padding: 16px; border-bottom: 1px solid var(--line); display: flex; align-items: baseline; gap: 12px; }
   header h1 { margin: 0; font-size: 20px; }
   header span { color: var(--muted); font-size: 13px; }
-  main { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; gap: 20px; }
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  section { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
   h2 { margin: 0 0 12px; font-size: 16px; }
   .muted { color: var(--muted); }
   .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -29,7 +29,7 @@
   button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
   button.danger { color: var(--bad); }
   button:disabled { opacity: .5; cursor: default; }
-  .devices { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  .devices { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); }
   .device { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
   .device h3 { margin: 0; font-size: 15px; display: flex; align-items: center; gap: 8px; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
@@ -43,6 +43,16 @@
   th { color: var(--muted); font-weight: 500; }
   .table-wrap { overflow-x: auto; }
   progress { width: 200px; }
+  .timeline { display: flex; height: 28px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); margin-top: 8px; }
+  .timeline div { height: 100%; min-width: 1px; }
+  .timeline .idle { background: var(--bg); }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; margin-top: 6px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  .axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+  .days label { font-size: 12px; margin-right: 4px; white-space: nowrap; }
+  #editor input[type=time], #editor input[type=number], #editor input[type=date] { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+  #editor input[type=number] { width: 64px; }
+  .hint { font-size: 12px; color: var(--muted); }
   #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg);
            padding: 8px 14px; border-radius: 8px; display: none; max-width: calc(100% - 32px); }
 </style>
@@ -66,6 +76,45 @@
     <div id="devices" class="devices"><p class="muted">Loading…</p></div>
   </section>
 
+  <section id="schedules">
+    <h2>Schedules</h2>
+    <p class="muted">A schedule says what plays when. Save it once, then pick it on any projector. Projectors keep following their schedule when the Pi or Wi-Fi is down.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Schedule</th><th>Time zone</th><th>Rules</th><th>Used by</th><th></th></tr></thead>
+        <tbody id="schedule-list"></tbody>
+      </table>
+    </div>
+    <div class="row" style="margin-top:12px"><button id="new-schedule">New schedule</button></div>
+
+    <div id="editor" hidden style="margin-top:16px; border-top:1px solid var(--line); padding-top:16px">
+      <h2 id="editor-title">New schedule</h2>
+      <div class="row">
+        <label>Name <input type="text" id="ed-id" placeholder="e.g. halloween-evening" pattern="[A-Za-z0-9_-]{1,64}"></label>
+        <label>Time zone <input type="text" id="ed-tz" list="tz-list" size="22"></label>
+        <label>Last day <input type="date" id="ed-end"></label>
+        <span class="hint">Leave "Last day" empty to run forever.</span>
+      </div>
+      <datalist id="tz-list"></datalist>
+      <div class="table-wrap" style="margin-top:12px">
+        <table>
+          <thead><tr><th>What</th><th>Clip</th><th>Days</th><th>Time</th><th>Priority</th><th>Options</th><th></th></tr></thead>
+          <tbody id="rules"></tbody>
+        </table>
+      </div>
+      <p class="hint">Higher priority wins when rules overlap (one-shots default to 10, loops to 0). A window whose end is before its start runs past midnight. One-shots more than 5 seconds late are skipped unless "Join late" is ticked.</p>
+      <div class="row">
+        <button id="add-rule">Add rule</button>
+        <button class="primary" id="save-schedule">Save</button>
+        <button id="close-editor">Close</button>
+      </div>
+      <div style="margin-top:16px">
+        <div class="row"><strong>Preview a day</strong> <input type="date" id="tl-date"> <span class="hint">Shows the saved version.</span></div>
+        <div id="timeline"></div>
+      </div>
+    </div>
+  </section>
+
   <section>
     <h2>Clips</h2>
     <p class="muted">Recommended export: H.264 MP4, 1280×720, 30 fps, AAC audio. Projectors have about 2 GB free, so keep clips short.</p>
@@ -85,7 +134,7 @@
 <div id="toast"></div>
 
 <script>
-const state = { devices: [], media: [], pending: [] };
+const state = { devices: [], media: [], pending: [], schedules: [] };
 const $ = (id) => document.getElementById(id);
 
 function toast(msg) {
@@ -186,6 +235,10 @@ function renderDevices() {
         ${errors}
       </dl>
       <div class="row">
+        <label class="muted">Schedule</label>
+        <select data-schedule>${schedOptions(d.schedule_id)}</select>
+      </div>
+      <div class="row">
         <select data-clip>${options}</select>
         <button data-cmd="once">Play once</button>
         <button data-cmd="loop" class="primary">Loop</button>
@@ -203,16 +256,198 @@ function renderDevices() {
   }).join("");
 }
 
+function schedOptions(current) {
+  const opts = ['<option value="">No schedule (black)</option>'].concat(state.schedules.map((s) =>
+    `<option value="${esc(s.schedule_id)}" ${s.schedule_id === current ? "selected" : ""}>${esc(s.schedule_id)}</option>`));
+  return opts.join("");
+}
+
+function renderSchedules() {
+  const names = Object.fromEntries(state.devices.map((d) => [d.id, d.name]));
+  $("schedule-list").innerHTML = state.schedules.map((s) => `<tr>
+      <td><code>${esc(s.schedule_id)}</code> <span class="muted">rev ${s.revision}</span>${s.end_date ? `<div class="hint">until ${esc(s.end_date)}</div>` : ""}</td>
+      <td>${esc(s.timezone)}</td><td>${s.rules.length}</td>
+      <td>${s.devices.map((id) => esc(names[id] || id)).join(", ") || '<span class="muted">none</span>'}</td>
+      <td class="row"><button data-edit="${esc(s.schedule_id)}">Edit</button><button class="danger" data-del-schedule="${esc(s.schedule_id)}">Delete</button></td>
+    </tr>`).join("") || '<tr><td colspan="5" class="muted">No schedules yet.</td></tr>';
+}
+
+// ---- Schedule editor ----
+const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const editor = { existing: false, rules: [] };
+
+function clipOptions(current) {
+  const ids = state.media.map((m) => m.id);
+  if (current && !ids.includes(current)) ids.unshift(current);
+  return ids.map((id) => `<option value="${esc(id)}" ${id === current ? "selected" : ""}>${esc(id)}</option>`).join("");
+}
+
+function ruleKind(r) {
+  if (r.at) return "at";
+  return r.action.type === "loop" ? "loop" : "once";
+}
+
+function renderRules() {
+  $("rules").innerHTML = editor.rules.map((r, i) => {
+    const kind = ruleKind(r);
+    const days = DAYS.map((d) => `<label><input type="checkbox" data-day="${d}" ${r.days.includes(d) ? "checked" : ""}>${d[0].toUpperCase() + d.slice(1, 2)}</label>`).join("");
+    const time = kind === "at"
+      ? `at <input type="time" data-f="at" value="${esc(r.at || "")}">`
+      : `<input type="time" data-f="start" value="${esc(r.start || "")}"> to <input type="time" data-f="end" value="${esc(r.end || "")}">`;
+    const opts = kind === "loop"
+      ? `<label class="hint"><input type="checkbox" data-f="resume" ${r.resume === "continue" ? "checked" : ""}> Resume mid-clip</label>`
+      : kind === "at"
+        ? `<label class="hint"><input type="checkbox" data-f="join" ${r.late_policy === "join_late" ? "checked" : ""}> Join late</label>`
+        : "";
+    return `<tr data-i="${i}">
+      <td><select data-f="kind">
+        <option value="loop" ${kind === "loop" ? "selected" : ""}>Loop during a window</option>
+        <option value="once" ${kind === "once" ? "selected" : ""}>Play once when a window starts</option>
+        <option value="at" ${kind === "at" ? "selected" : ""}>Play once at a time</option>
+      </select></td>
+      <td><select data-f="clip">${clipOptions(r.action.media_id)}</select></td>
+      <td class="days">${days}<div class="hint">none ticked = every day</div></td>
+      <td style="white-space:nowrap">${time}</td>
+      <td><input type="number" data-f="priority" value="${r.priority ?? ""}" placeholder="${kind === "loop" ? 0 : 10}"></td>
+      <td>${opts}</td>
+      <td><button class="danger" data-f="remove">Remove</button></td>
+    </tr>`;
+  }).join("") || '<tr><td colspan="7" class="muted">No rules. Add one below.</td></tr>';
+}
+
+function readRules() {
+  document.querySelectorAll("#rules tr[data-i]").forEach((tr) => {
+    const r = editor.rules[+tr.dataset.i];
+    const v = (f) => tr.querySelector(`[data-f="${f}"]`);
+    const kind = v("kind").value;
+    r.action = { type: kind === "loop" ? "loop" : "play_once", media_id: v("clip").value };
+    r.days = [...tr.querySelectorAll("[data-day]")].filter((c) => c.checked).map((c) => c.dataset.day);
+    if (kind === "at") { r.at = v("at")?.value || r.at || null; delete r.start; delete r.end; }
+    else { r.start = v("start")?.value || r.start || null; r.end = v("end")?.value || r.end || null; delete r.at; }
+    const p = v("priority").value;
+    if (p === "") delete r.priority; else r.priority = parseInt(p, 10);
+    r.resume = v("resume")?.checked ? "continue" : "restart";
+    r.late_policy = v("join")?.checked ? "join_late" : "skip";
+  });
+}
+
+function openEditor(s) {
+  editor.existing = !!s;
+  editor.rules = s ? JSON.parse(JSON.stringify(s.rules)) : [];
+  editor.rules.forEach((r) => (r.days = r.days || []));
+  $("editor").hidden = false;
+  $("editor-title").textContent = s ? `Edit ${s.schedule_id}` : "New schedule";
+  $("ed-id").value = s ? s.schedule_id : "";
+  $("ed-id").disabled = !!s;
+  $("ed-tz").value = s ? s.timezone : Intl.DateTimeFormat().resolvedOptions().timeZone;
+  $("ed-end").value = s?.end_date || "";
+  $("timeline").innerHTML = "";
+  renderRules();
+  if (s) loadTimeline();
+  $("editor").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function newRuleId() {
+  let n = editor.rules.length + 1;
+  while (editor.rules.some((r) => r.id === `rule-${n}`)) n++;
+  return `rule-${n}`;
+}
+
+const hms = (t) => (t.endsWith(":00") ? t.slice(0, 5) : t);
+const COLORS = ["#ea580c", "#7c3aed", "#0891b2", "#16a34a", "#db2777", "#ca8a04", "#2563eb", "#64748b"];
+async function loadTimeline() {
+  const id = $("ed-id").value; if (!id || !editor.existing) return;
+  try {
+    const date = $("tl-date").value;
+    const segs = await api("GET", `/api/v1/admin/schedules/${encodeURIComponent(id)}/timeline${date ? "?date=" + date : ""}`);
+    const total = segs.reduce((a, s) => a + (new Date(s.end) - new Date(s.start)), 0) || 1;
+    const clips = [...new Set(segs.filter((s) => s.desired.state === "play").map((s) => s.desired.media_id))];
+    const color = (m) => COLORS[clips.indexOf(m) % COLORS.length];
+    const bar = segs.map((s) => {
+      const w = (new Date(s.end) - new Date(s.start)) / total * 100;
+      const tip = `${s.start_local}–${s.end_local}: ${describe(s.desired)}`;
+      return s.desired.state === "play"
+        ? `<div style="width:${w}%;background:${color(s.desired.media_id)}" title="${esc(tip)}"></div>`
+        : `<div class="idle" style="width:${w}%" title="${esc(tip)}"></div>`;
+    }).join("");
+    const list = segs.filter((s) => s.desired.state === "play")
+      .map((s) => `<div>${esc(hms(s.start_local))}–${esc(hms(s.end_local))} ${esc(describe(s.desired))}</div>`).join("");
+    $("timeline").innerHTML = `<div class="timeline">${bar}</div>
+      <div class="axis"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
+      <div class="legend">${clips.map((m) => `<span><i style="background:${color(m)}"></i>${esc(m)}</span>`).join("") || '<span class="muted">Black all day.</span>'}</div>
+      <div class="hint" style="margin-top:6px">${list}</div>`;
+  } catch (err) { $("timeline").innerHTML = `<p class="bad">${esc(err.message)}</p>`; }
+}
+
+$("new-schedule").addEventListener("click", () => openEditor(null));
+$("close-editor").addEventListener("click", () => ($("editor").hidden = true));
+$("tl-date").addEventListener("change", loadTimeline);
+$("add-rule").addEventListener("click", () => {
+  readRules();
+  editor.rules.push({ id: newRuleId(), days: [], start: "19:00", end: "22:00",
+    action: { type: "loop", media_id: state.media[0]?.id || "" }, late_policy: "skip", resume: "restart" });
+  renderRules();
+});
+$("rules").addEventListener("change", (e) => {
+  if (e.target.dataset.f !== "kind") return;
+  readRules();
+  const r = editor.rules[+e.target.closest("tr").dataset.i];
+  if (e.target.value === "at") { r.at = r.at || r.start || "19:15"; delete r.start; delete r.end; }
+  else { r.start = r.start || r.at || "19:00"; r.end = r.end || "22:00"; delete r.at; }
+  renderRules();
+});
+$("rules").addEventListener("click", (e) => {
+  if (e.target.dataset.f !== "remove") return;
+  readRules();
+  editor.rules.splice(+e.target.closest("tr").dataset.i, 1);
+  renderRules();
+});
+$("save-schedule").addEventListener("click", async () => {
+  readRules();
+  const id = $("ed-id").value.trim();
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return toast("Name may use letters, digits, - and _ only.");
+  if (!editor.existing && state.schedules.some((s) => s.schedule_id === id)) return toast(`A schedule called ${id} already exists.`);
+  for (const r of editor.rules) {
+    if (!r.action.media_id) return toast("Every rule needs a clip. Upload one first.");
+    if (r.at === null || r.start === null || r.end === null) return toast("Fill in the times for every rule.");
+  }
+  const body = { schedule_id: id, revision: 0, timezone: $("ed-tz").value.trim(), rules: editor.rules };
+  if ($("ed-end").value) body.end_date = $("ed-end").value;
+  try {
+    const saved = await api("PUT", `/api/v1/admin/schedules/${encodeURIComponent(id)}`, body);
+    toast(`Saved ${id} (revision ${saved.revision}). Projectors using it update now.`);
+    editor.existing = true;
+    $("ed-id").disabled = true; $("editor-title").textContent = `Edit ${id}`;
+    await refresh();
+    loadTimeline();
+  } catch (err) { toast(err.message); }
+});
+$("schedule-list").addEventListener("click", async (e) => {
+  const edit = e.target.dataset.edit, del = e.target.dataset.delSchedule;
+  if (edit) openEditor(state.schedules.find((s) => s.schedule_id === edit));
+  if (del) {
+    if (!confirm(`Delete schedule ${del}?`)) return;
+    try { await api("DELETE", `/api/v1/admin/schedules/${encodeURIComponent(del)}`); refresh(); }
+    catch (err) { toast(err.message); }
+  }
+});
+try { $("tz-list").innerHTML = Intl.supportedValuesOf("timeZone").map((z) => `<option value="${z}">`).join(""); } catch {}
+
 async function refresh() {
   try {
-    const [devices, media, pending] = await Promise.all([
+    const [devices, media, pending, schedules] = await Promise.all([
       api("GET", "/api/v1/admin/devices"), api("GET", "/api/v1/admin/media"), api("GET", "/api/v1/admin/pairings"),
+      api("GET", "/api/v1/admin/schedules"),
     ]);
     // Keep the user's clip selection while re-rendering.
     const picked = {};
     document.querySelectorAll(".device").forEach((el) => (picked[el.dataset.id] = el.querySelector("[data-clip]")?.value));
-    Object.assign(state, { devices, media, pending });
-    renderPending(); renderMedia(); renderDevices();
+    Object.assign(state, { devices, media, pending, schedules });
+    renderPending(); renderMedia(); renderSchedules();
+    // Don't redraw the cards while a dropdown on them is open.
+    const focused = document.activeElement;
+    if (focused && focused.tagName === "SELECT" && $("devices").contains(focused)) return;
+    renderDevices();
     document.querySelectorAll(".device").forEach((el) => {
       const sel = el.querySelector("[data-clip]");
       if (sel && picked[el.dataset.id]) sel.value = picked[el.dataset.id];
@@ -251,6 +486,17 @@ $("devices").addEventListener("click", async (e) => {
       if (!confirm("Remove this projector? It will need to pair again.")) return;
       await api("DELETE", `/api/v1/admin/devices/${encodeURIComponent(id)}`);
     } else return;
+    refresh();
+  } catch (err) { toast(err.message); }
+});
+
+$("devices").addEventListener("change", async (e) => {
+  if (e.target.dataset.schedule === undefined) return;
+  const id = e.target.closest(".device").dataset.id;
+  try {
+    await api("PUT", `/api/v1/admin/devices/${encodeURIComponent(id)}/schedule`, { schedule_id: e.target.value || null });
+    e.target.blur();
+    toast(e.target.value ? `Schedule ${e.target.value} sent.` : "Schedule removed.");
     refresh();
   } catch (err) { toast(err.message); }
 });

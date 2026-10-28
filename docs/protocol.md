@@ -94,8 +94,12 @@ All under `/api/v1/admin/`, Basic auth.
 | `DELETE devices/{id}` | Unpair |
 | `PUT devices/{id}/media` | Set assigned clips: `{"media_ids": [...]}` (clips in use are kept) |
 | `POST devices/{id}/command` | Manual override: `{"action": {"type":"play","media_id":"x","loop":true} \| {"type":"stop"} \| null, "hold": false, "max_duration_ms": null}`. `null` returns to the schedule. |
-| `PUT devices/{id}/schedule` | Set or clear (`null`) the schedule. Validated; referenced clips are assigned automatically. |
+| `PUT devices/{id}/schedule` | Assign a saved schedule, or clear it: `{"schedule_id": "evening" \| null}`. Clips it uses are assigned automatically. |
 | `GET devices/{id}/preview?at=…` | What the engine says should play at a given time |
+| `GET schedules` | Saved schedules, each with `devices` (IDs of projectors using it) |
+| `PUT schedules/{id}` | Create or replace a schedule (body as in "Schedule format"; `schedule_id` and `revision` are set by the server). Every projector using it gets the new version. Unknown clips or invalid rules return `400`. |
+| `DELETE schedules/{id}` | Delete a schedule. Returns `409` while a projector uses it. |
+| `GET schedules/{id}/timeline?date=YYYY-MM-DD` | What the schedule plays over one local day, as segments `{start, end, start_local, end_local, desired}` |
 | `GET pairings` | Pending pairing requests |
 | `POST pairings/approve` | `{"code": "123456", "name": "optional"}` |
-| `GET media`, `POST media` (multipart `file`), `DELETE media/{id}` | Clip library. Deleting a clip that a schedule or override uses returns `409`. |
+| `GET media`, `POST media` (multipart `file`), `DELETE media/{id}` | Clip library. Deleting a clip that a saved schedule or an override uses returns `409`. |

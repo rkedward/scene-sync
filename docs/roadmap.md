@@ -18,8 +18,8 @@ From the v0.1 design draft and its review (October 2026).
 ## Phases
 
 - **Phase 0, hardware feasibility.** See [phase0-hardware-checklist.md](phase0-hardware-checklist.md).
-- **Phase 1, single projector MVP (this release).** Server with dashboard, pairing, upload, download with checksum, play/loop/stop/black remotely, offline playback from cache. Schedule engine and shared fixtures are in place already; schedules can be set through the API.
-- **Phase 2, scheduling and offline resilience.** Schedule editor in the dashboard, Wi-Fi and Pi outage tests, reboot tests, DST tests.
+- **Phase 1, single projector MVP (done).** Server with dashboard, pairing, upload, download with checksum, play/loop/stop/black remotely, offline playback from cache. Schedule engine and shared fixtures.
+- **Phase 2, scheduling and offline resilience (done).** Shared schedules with an editor and day preview in the dashboard. Automated test: the test player keeps playing while the server is down, plays from cache after a restart with no server, and catches up when it returns. DST cases are in the shared fixtures. Reboot and Wi-Fi tests on a real projector are in the Phase 0 checklist.
 - **Phase 2b, fit to window (projection mapping).** Project a calibration pattern, photograph it with a phone, mark the window corners, and warp every clip onto the window with black around it. The player applies the warp on the GPU (Media3 video effects with a 4-point perspective matrix).
 - **Phase 3, multiple projectors.** Groups, per-device schedules at scale, concurrent downloads, silent app updates (device-owner mode).
 - **Phase 4, synchronized groups.** Preload-then-play, per-device latency trim, drift correction by playback speed, measured tolerance.

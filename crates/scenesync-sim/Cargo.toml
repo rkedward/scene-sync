@@ -19,3 +19,9 @@ tokio-tungstenite = "0.27"
 futures-util = "0.3"
 rand = "0.9"
 clap = { version = "4", features = ["derive", "env"] }
+
+[dev-dependencies]
+scenesync-server = { path = "../scenesync-server" }
+axum = "0.8"
+tempfile = "3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
