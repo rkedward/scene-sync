@@ -10,9 +10,6 @@ pluginManagement {
         mavenCentral()
         gradlePluginPortal()
     }
-    plugins {
-        id("com.android.application") version "8.7.3"
-    }
 }
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
@@ -31,8 +28,8 @@ dependencyResolutionManagement {
 rootProject.name = "scenesync-android"
 
 // The schedule engine is plain Kotlin/JVM so it can be tested without the
-// Android SDK: ./gradlew -PengineOnly :engine:test
+// Android SDK or Google's Maven repo: ./gradlew -DengineOnly :engine:test
 include(":engine")
-if (!providers.gradleProperty("engineOnly").isPresent) {
+if (!providers.systemProperty("engineOnly").isPresent) {
     include(":app")
 }

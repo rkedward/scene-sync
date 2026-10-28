@@ -67,7 +67,7 @@ For a permanent setup, make SceneSync Player the projector's **home app** (Andro
 
 ```sh
 cargo test --all                                    # server, engine fixtures, end-to-end API test
-cd android && ./gradlew -PengineOnly :engine:test   # Kotlin engine fixtures (no Android SDK needed)
+cd android && ./gradlew -DengineOnly :engine:test   # Kotlin engine fixtures (no Android SDK needed)
 ```
 
 ## License
