@@ -75,9 +75,7 @@ Projectors keep their pairing because their tokens are in the database. If the P
 
 ## Make a release
 
-```sh
-git tag v0.5.0 && git push origin v0.5.0
-```
+In GitHub, open **Actions → Release → Run workflow**, type a version such as `v0.5.1`, and run it. (Pushing a `v*` tag does the same.)
 
 The Release workflow builds the Pi (arm64) and PC (x64) servers and the APK, and publishes them with `install.sh`. Every APK is signed with the debug key checked into `android/app/debug.keystore`, so updates install over each other. That key is public; switch to a private key before sharing builds outside your house.
 
