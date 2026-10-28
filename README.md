@@ -6,7 +6,7 @@ Schedule and play video clips on several projectors around a house, controlled f
 - Each projector runs the **SceneSync Player** Android app. It downloads its clips and schedule and keeps playing them if the Pi or Wi-Fi goes down.
 - A **test player** (`scenesync-sim`) runs the same protocol on a laptop, so you can try everything without a projector.
 
-Status: Phase 1 (single projector MVP). See [docs/roadmap.md](docs/roadmap.md).
+Status: Phase 2 (schedules and offline resilience). See [docs/roadmap.md](docs/roadmap.md).
 
 ## Repository layout
 
@@ -35,7 +35,9 @@ cargo run -p scenesync-sim -- --server http://127.0.0.1:8080 --name "Test window
 1. Open http://127.0.0.1:8080 and log in with any username and the password `changeme`.
 2. Type the 6-digit code shown by the test player under **Add a projector**.
 3. Upload an MP4 under **Clips**, pick it on the projector card, and press **Loop**.
-4. Stop the server: the test player keeps playing. Start it again and it catches up.
+4. Under **Schedules**, press **New schedule**, add rules (for example "Loop during a window" 19:00 to 22:00 and "Play once at a time" 19:15), and save. **Preview a day** shows what will play when.
+5. Pick the schedule on the projector card. If you pressed **Loop** earlier, press **Return to schedule** so the schedule takes over.
+6. Stop the server: the test player keeps playing. Start it again and it catches up.
 
 ## Run the server on a Raspberry Pi
 
@@ -66,7 +68,7 @@ For a permanent setup, make SceneSync Player the projector's **home app** (Andro
 ## Tests
 
 ```sh
-cargo test --all                                    # server, engine fixtures, end-to-end API test
+cargo test --all                                    # server, engine fixtures, API tests, outage test
 cd android && ./gradlew -DengineOnly :engine:test   # Kotlin engine fixtures (no Android SDK needed)
 ```
 

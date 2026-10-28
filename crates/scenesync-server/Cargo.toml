@@ -9,6 +9,7 @@ license.workspace = true
 scenesync-core = { path = "../scenesync-core" }
 anyhow.workspace = true
 chrono.workspace = true
+chrono-tz.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

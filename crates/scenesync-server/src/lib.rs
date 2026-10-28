@@ -4,6 +4,7 @@
 pub mod db;
 pub mod mdns;
 mod media;
+mod schedules;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -111,7 +112,7 @@ impl AppState {
         })))
     }
 
-    fn notify(&self, device_id: &str, revision: Option<u64>) {
+    pub(crate) fn notify(&self, device_id: &str, revision: Option<u64>) {
         if let Some(rev) = revision {
             let _ = self.changes.send((device_id.to_string(), rev));
         }
@@ -152,7 +153,16 @@ pub fn app(state: AppState) -> Router {
         .route("/api/v1/admin/devices/{id}/command", post(admin_command))
         .route(
             "/api/v1/admin/devices/{id}/schedule",
-            put(admin_set_schedule),
+            put(schedules::set_device_schedule),
+        )
+        .route("/api/v1/admin/schedules", get(schedules::list))
+        .route(
+            "/api/v1/admin/schedules/{id}",
+            put(schedules::save).delete(schedules::remove),
+        )
+        .route(
+            "/api/v1/admin/schedules/{id}/timeline",
+            get(schedules::timeline),
         )
         .route("/api/v1/admin/devices/{id}/preview", get(admin_preview))
         .route("/api/v1/admin/pairings", get(admin_pairings))
@@ -613,7 +623,7 @@ async fn admin_set_device_media(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn required_media(schedule: Option<&Schedule>, ov: Option<&Override>) -> Vec<String> {
+pub(crate) fn required_media(schedule: Option<&Schedule>, ov: Option<&Override>) -> Vec<String> {
     let mut out: Vec<String> = schedule
         .map(|s| {
             s.rules
@@ -686,36 +696,6 @@ async fn admin_command(
         revision: rev,
         override_: ov,
     }))
-}
-
-async fn admin_set_schedule(
-    _: Admin,
-    State(state): State<AppState>,
-    UrlPath(id): UrlPath<String>,
-    Json(schedule): Json<Option<Schedule>>,
-) -> ApiResult<StatusCode> {
-    state
-        .db
-        .device(&id)?
-        .ok_or_else(|| ApiError::not_found("device"))?;
-    if let Some(s) = &schedule {
-        s.validate()
-            .map_err(|e| ApiError::bad_request(e.to_string()))?;
-        let needed = required_media(Some(s), None);
-        for m in &needed {
-            if !state.db.media_exists(m)? {
-                return Err(ApiError::bad_request(format!(
-                    "schedule uses unknown media {m:?}"
-                )));
-            }
-        }
-        state
-            .db
-            .add_device_media(&id, &needed.iter().map(String::as_str).collect::<Vec<_>>())?;
-    }
-    let rev = state.db.set_schedule(&id, schedule.as_ref())?;
-    state.notify(&id, rev);
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -804,7 +784,12 @@ async fn admin_delete_media(
             .iter()
             .any(|m| m == &id)
     });
-    if in_use {
+    let in_schedule = state
+        .db
+        .schedules()?
+        .iter()
+        .any(|s| required_media(Some(s), None).iter().any(|m| m == &id));
+    if in_use || in_schedule {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "clip is used by a schedule or a live command",

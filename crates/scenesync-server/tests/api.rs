@@ -229,7 +229,7 @@ async fn pair_upload_command_download() {
     assert_eq!(res.status(), 204);
 
     // Bad schedules are rejected with a reason.
-    let res = admin(http.put(format!("{base}/api/v1/admin/devices/dev-1/schedule")))
+    let res = admin(http.put(format!("{base}/api/v1/admin/schedules/bad")))
         .json(
             &json!({ "schedule_id": "s", "revision": 1, "timezone": "Mars/Olympus", "rules": [] }),
         )
@@ -237,4 +237,156 @@ async fn pair_upload_command_download() {
         .await
         .unwrap();
     assert_eq!(res.status(), 400);
+}
+
+#[tokio::test]
+async fn shared_schedules() {
+    let (base, _dir) = start().await;
+    let http = reqwest::Client::new();
+    let admin = |rb: reqwest::RequestBuilder| rb.basic_auth("admin", Some("secret"));
+
+    // Pair a device.
+    let pair_req = json!({ "device_id": "dev-2", "code": "654321", "name": "Side", "protocol_version": PROTOCOL_VERSION });
+    http.post(format!("{base}/api/v1/pair"))
+        .json(&pair_req)
+        .send()
+        .await
+        .unwrap();
+    admin(http.post(format!("{base}/api/v1/admin/pairings/approve")))
+        .json(&json!({ "code": "654321" }))
+        .send()
+        .await
+        .unwrap();
+    let r: PairResponse = http
+        .post(format!("{base}/api/v1/pair"))
+        .json(&pair_req)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token = r.token.unwrap();
+
+    // Upload a clip and save a schedule that uses it.
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(vec![1u8; 1000]).file_name("bats.mp4"),
+    );
+    admin(http.post(format!("{base}/api/v1/admin/media")))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    let schedule = json!({ "schedule_id": "ignored", "revision": 99, "timezone": "America/Denver", "rules": [
+        { "id": "bats", "start": "00:00", "end": "23:59", "action": { "type": "loop", "media_id": "bats" } }
+    ]});
+    let saved: serde_json::Value =
+        admin(http.put(format!("{base}/api/v1/admin/schedules/evening")))
+            .json(&schedule)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    assert_eq!(saved["schedule_id"], "evening");
+    assert_eq!(saved["revision"], 1);
+
+    // Unknown clips are rejected.
+    let bad = json!({ "schedule_id": "x", "revision": 1, "timezone": "America/Denver", "rules": [
+        { "id": "r", "at": "19:00", "action": { "type": "play_once", "media_id": "nope" } } ]});
+    let res = admin(http.put(format!("{base}/api/v1/admin/schedules/x")))
+        .json(&bad)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+
+    // Assign it: the device config now carries the schedule and its clip.
+    let res = admin(http.put(format!("{base}/api/v1/admin/devices/dev-2/schedule")))
+        .json(&json!({ "schedule_id": "evening" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    let cfg: DeviceConfig = http
+        .get(format!("{base}/api/v1/device/config"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cfg.schedule.as_ref().unwrap().schedule_id, "evening");
+    assert_eq!(cfg.media[0].media_id, "bats");
+    let rev = cfg.revision;
+
+    // Editing the schedule bumps the device revision and the schedule revision.
+    let saved: serde_json::Value =
+        admin(http.put(format!("{base}/api/v1/admin/schedules/evening")))
+            .json(&schedule)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    assert_eq!(saved["revision"], 2);
+    let cfg: DeviceConfig = http
+        .get(format!("{base}/api/v1/device/config"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(cfg.revision > rev);
+    assert_eq!(cfg.schedule.as_ref().unwrap().revision, 2);
+
+    // In-use schedules and clips cannot be deleted.
+    let res = admin(http.delete(format!("{base}/api/v1/admin/schedules/evening")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 409);
+    let res = admin(http.delete(format!("{base}/api/v1/admin/media/bats")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 409);
+
+    // Timeline and list.
+    let tl: serde_json::Value = admin(http.get(format!(
+        "{base}/api/v1/admin/schedules/evening/timeline?date=2026-10-30"
+    )))
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(tl[0]["desired"]["media_id"], "bats");
+    let list: serde_json::Value = admin(http.get(format!("{base}/api/v1/admin/schedules")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(list[0]["devices"][0], "dev-2");
+
+    // Unassign, then delete works.
+    admin(http.put(format!("{base}/api/v1/admin/devices/dev-2/schedule")))
+        .json(&json!({ "schedule_id": null }))
+        .send()
+        .await
+        .unwrap();
+    let res = admin(http.delete(format!("{base}/api/v1/admin/schedules/evening")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
 }
