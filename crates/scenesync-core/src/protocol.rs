@@ -84,6 +84,19 @@ pub struct DeviceConfig {
     /// Show the calibration pattern instead of video (used while fitting).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub calibrate: bool,
+    /// The player app every projector should run. A player whose own APK has
+    /// a different SHA-256 downloads and installs this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_update: Option<AppRelease>,
+}
+
+/// An Android player APK served by the server.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AppRelease {
+    pub sha256: String,
+    pub size: u64,
+    /// Path on the server, relative to the server base URL.
+    pub url: String,
 }
 
 /// A four-corner warp. `corners` are the top-left, top-right, bottom-right
@@ -163,6 +176,9 @@ pub struct DeviceReport {
     pub clock_offset_ms: Option<i64>,
     #[serde(default)]
     pub app_version: Option<String>,
+    /// SHA-256 of the running app package, to tell whether an update applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_sha256: Option<String>,
     #[serde(default)]
     pub errors: Vec<String>,
 }

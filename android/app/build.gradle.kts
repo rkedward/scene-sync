@@ -13,8 +13,21 @@ android {
         // The HY300 Pro+ runs Android 14 (API 34). 26 keeps older projectors possible.
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI builds count up, so a newer build can always replace an older one.
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()?.plus(100) ?: 1
+        versionName = "0.3.0"
+    }
+
+    signingConfigs {
+        // A fixed debug key checked into the repo, so every build (CI or local)
+        // has the same signature and can update the app in place. It protects
+        // nothing; use a private release key for anything public.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {

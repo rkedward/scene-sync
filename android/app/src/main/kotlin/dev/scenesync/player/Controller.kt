@@ -76,7 +76,9 @@ class Controller(private val context: Context) {
     private val manualServerUrl = Channel<String>(Channel.CONFLATED)
     private var started = false
 
-    private val appVersion = "android ${BuildConfig.VERSION_NAME}"
+    private val appVersion = "android ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+
+    val updater = Updater(context, http) { reportError(it) }
 
     fun start() {
         if (started) return
@@ -224,6 +226,13 @@ class Controller(private val context: Context) {
                         } catch (e: Exception) {
                             reportError("Update to revision ${msg.revision} failed: ${e.message}")
                         }
+                    } else if (msg is ServerMessage.ConfigChanged) {
+                        // Same config, but an earlier app update may still be due.
+                        try {
+                            updater.maybeUpdate(server, token, _config.value?.appUpdate)
+                        } catch (e: Exception) {
+                            reportError("App update: ${e.message}")
+                        }
                     }
                 }
                 if (SystemClock.elapsedRealtime() - lastSync > 10 * 60_000) {
@@ -279,6 +288,12 @@ class Controller(private val context: Context) {
         _config.value = cfg
         lastError = null
         Log.i(TAG, "applied revision ${cfg.revision}")
+
+        try {
+            updater.maybeUpdate(server, token, cfg.appUpdate)
+        } catch (e: Exception) {
+            reportError("App update: ${e.message}")
+        }
 
         val keep = cfg.media.map { it.sha256 }.toSet()
         mediaDir.listFiles()?.forEach { f ->
@@ -343,6 +358,7 @@ class Controller(private val context: Context) {
             mediaBytes = mediaDir.listFiles()?.sumOf { it.length() },
             clockOffsetMs = clock.wallOffsetMs(),
             appVersion = appVersion,
+            appSha256 = runCatching { updater.ownSha256 }.getOrNull(),
             errors = listOfNotNull(lastError),
         )
         val body = SceneSyncJson.encodeToString(DeviceReport.serializer(), report).toRequestBody(JSON)

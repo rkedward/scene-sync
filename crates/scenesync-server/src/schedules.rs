@@ -82,6 +82,12 @@ pub(crate) async fn remove(
     State(state): State<AppState>,
     UrlPath(id): UrlPath<String>,
 ) -> ApiResult<StatusCode> {
+    if !state.db.schedule_groups(&id)?.is_empty() {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "schedule is assigned to a group",
+        ));
+    }
     let users = state.db.schedule_users(&id)?;
     if !users.is_empty() {
         return Err(ApiError::new(
@@ -111,21 +117,31 @@ pub(crate) async fn set_device_schedule(
         .db
         .device(&id)?
         .ok_or_else(|| ApiError::not_found("device"))?;
-    if let Some(sid) = &req.schedule_id {
+    assign(&state, &id, req.schedule_id.as_deref())?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Gives a device a schedule (or none), adding the clips it needs, and tells
+/// the device.
+pub(crate) fn assign(
+    state: &AppState,
+    device_id: &str,
+    schedule_id: Option<&str>,
+) -> ApiResult<()> {
+    if let Some(sid) = schedule_id {
         let s = state
             .db
             .schedule(sid)?
             .ok_or_else(|| ApiError::not_found("schedule"))?;
         let needed = required_media(Some(&s), None);
-        state
-            .db
-            .add_device_media(&id, &needed.iter().map(String::as_str).collect::<Vec<_>>())?;
+        state.db.add_device_media(
+            device_id,
+            &needed.iter().map(String::as_str).collect::<Vec<_>>(),
+        )?;
     }
-    let rev = state
-        .db
-        .set_device_schedule(&id, req.schedule_id.as_deref())?;
-    state.notify(&id, rev);
-    Ok(StatusCode::NO_CONTENT)
+    let rev = state.db.set_device_schedule(device_id, schedule_id)?;
+    state.notify(device_id, rev);
+    Ok(())
 }
 
 #[derive(Deserialize)]

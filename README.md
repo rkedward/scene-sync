@@ -6,7 +6,7 @@ Schedule and play video clips on several projectors around a house, controlled f
 - Each projector runs the **SceneSync Player** Android app. It downloads its clips and schedule and keeps playing them if the Pi or Wi-Fi goes down.
 - A **test player** (`scenesync-sim`) runs the same protocol on a laptop, so you can try everything without a projector.
 
-Status: Phase 2b (schedules, offline resilience, fit to window). See [docs/roadmap.md](docs/roadmap.md).
+Status: Phase 3 (schedules, offline resilience, fit to window, groups, app updates). See [docs/roadmap.md](docs/roadmap.md).
 
 ## Repository layout
 
@@ -64,6 +64,18 @@ adb install -r scenesync-player-debug.apk
 Then open **SceneSync Player**. It looks for the server, shows a 6-digit code, and waits for you to enter it in the dashboard.
 
 For a permanent setup, make SceneSync Player the projector's **home app** (Android asks which home app to use when you press the Home button). That is the most reliable way for it to come back after a reboot or power cut on Android 14. While it is the home app, press **Back three times quickly** to open system settings. Any other remote key shows the status overlay for 10 seconds.
+
+## Groups and app updates
+
+Under **Groups**, add a group (for example "Garage doors"), then pick it on each projector card. A group's schedule goes to all its projectors, and its command buttons control them together. The **All projectors** bar does the same for everything.
+
+To update the player app, upload the APK under **Player app**. Each projector downloads it and installs it. The first update after installing with `adb` shows an Android "Install" prompt; press it with the remote. Later updates install on their own. For no prompts at all, make the app device owner once, on a projector with no Google account:
+
+```sh
+adb shell dpm set-device-owner dev.scenesync.player/.AdminReceiver
+```
+
+Builds from before Phase 3 were signed with a different key, so uninstall the old app once (`adb uninstall dev.scenesync.player`) before installing a new build. You'll need to pair it again.
 
 ## Fit a clip to a window
 

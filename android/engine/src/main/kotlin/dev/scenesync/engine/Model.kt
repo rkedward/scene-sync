@@ -170,7 +170,12 @@ data class DeviceConfig(
     val mapping: Mapping? = null,
     /** Show the calibration pattern instead of video. */
     val calibrate: Boolean = false,
+    /** The player APK every projector should run. */
+    @SerialName("app_update") val appUpdate: AppRelease? = null,
 )
+
+@Serializable
+data class AppRelease(val sha256: String, val size: Long, val url: String)
 
 /**
  * Where the video's top-left, top-right, bottom-right and bottom-left
@@ -193,6 +198,7 @@ data class DeviceReport(
     @SerialName("media_bytes") val mediaBytes: Long? = null,
     @SerialName("clock_offset_ms") val clockOffsetMs: Long? = null,
     @SerialName("app_version") val appVersion: String? = null,
+    @SerialName("app_sha256") val appSha256: String? = null,
     val errors: List<String> = emptyList(),
 )
 

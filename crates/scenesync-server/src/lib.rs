@@ -1,7 +1,9 @@
 //! SceneSync server library. `main.rs` wires it to a TCP listener; tests use
 //! [`app`] directly.
 
+mod app_update;
 pub mod db;
+mod groups;
 pub mod mdns;
 mod media;
 mod schedules;
@@ -160,6 +162,26 @@ pub fn app(state: AppState) -> Router {
             "/api/v1/admin/devices/{id}/schedule",
             put(schedules::set_device_schedule),
         )
+        .route(
+            "/api/v1/admin/devices/{id}/group",
+            put(groups::set_device_group),
+        )
+        .route("/api/v1/admin/groups", get(groups::list))
+        .route(
+            "/api/v1/admin/groups/{id}",
+            put(groups::save).delete(groups::remove),
+        )
+        .route(
+            "/api/v1/admin/groups/{id}/schedule",
+            put(groups::set_schedule),
+        )
+        .route("/api/v1/admin/command", post(admin_bulk_command))
+        .route(
+            "/api/v1/admin/app",
+            get(app_update::info)
+                .post(app_update::upload)
+                .delete(app_update::remove),
+        )
         .route("/api/v1/admin/schedules", get(schedules::list))
         .route(
             "/api/v1/admin/schedules/{id}",
@@ -179,6 +201,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/v1/time", get(time))
         .route("/api/v1/pair", post(pair))
         .route("/api/v1/media/{id}/content", get(media_content))
+        .route(app_update::APK_URL, get(app_update::download))
         .merge(device_api)
         .merge(admin_api)
         // Uploads stream to disk, so the limit only bounds a single request.
@@ -422,6 +445,7 @@ fn build_config(state: &AppState, d: &Device) -> ApiResult<DeviceConfig> {
         idle: IdleMode::Black,
         mapping: d.mapping.clone(),
         calibrate: d.calibrate,
+        app_update: app_update::release_for_config(state),
     })
 }
 
@@ -709,6 +733,44 @@ struct CommandResponse {
     override_: Option<Override>,
 }
 
+impl CommandRequest {
+    /// Builds the override; `None` returns devices to their schedule.
+    fn to_override(&self, state: &AppState) -> ApiResult<Option<Override>> {
+        let Some(action) = &self.action else {
+            return Ok(None);
+        };
+        if let OverrideAction::Play { media_id, .. } = action {
+            if !state.db.media_exists(media_id)? {
+                return Err(ApiError::bad_request(format!("unknown media {media_id:?}")));
+            }
+        }
+        Ok(Some(Override {
+            override_id: random_token(6),
+            action: action.clone(),
+            issued_at: Utc::now(),
+            hold: self.hold,
+            max_duration_ms: self.max_duration_ms,
+        }))
+    }
+}
+
+/// Applies an override to one device. Returns the new revision.
+fn apply_override(state: &AppState, id: &str, ov: Option<&Override>) -> ApiResult<u64> {
+    if let Some(Override {
+        action: OverrideAction::Play { media_id, .. },
+        ..
+    }) = ov
+    {
+        state.db.add_device_media(id, &[media_id])?;
+    }
+    let rev = state
+        .db
+        .set_override(id, ov)?
+        .ok_or_else(|| ApiError::not_found("device"))?;
+    state.notify(id, Some(rev));
+    Ok(rev)
+}
+
 async fn admin_command(
     _: Admin,
     State(state): State<AppState>,
@@ -719,31 +781,54 @@ async fn admin_command(
         .db
         .device(&id)?
         .ok_or_else(|| ApiError::not_found("device"))?;
-    let ov = match req.action {
-        None => None,
-        Some(action) => {
-            if let OverrideAction::Play { media_id, .. } = &action {
-                if !state.db.media_exists(media_id)? {
-                    return Err(ApiError::bad_request(format!("unknown media {media_id:?}")));
-                }
-                state.db.add_device_media(&id, &[media_id])?;
-            }
-            Some(Override {
-                override_id: random_token(6),
-                action,
-                issued_at: Utc::now(),
-                hold: req.hold,
-                max_duration_ms: req.max_duration_ms,
-            })
-        }
-    };
-    let rev = state
-        .db
-        .set_override(&id, ov.as_ref())?
-        .ok_or_else(|| ApiError::not_found("device"))?;
-    state.notify(&id, Some(rev));
+    let ov = req.to_override(&state)?;
+    let rev = apply_override(&state, &id, ov.as_ref())?;
     Ok(Json(CommandResponse {
         revision: rev,
+        override_: ov,
+    }))
+}
+
+#[derive(Deserialize)]
+struct BulkCommandRequest {
+    /// Devices to command; `null` means every paired projector.
+    device_ids: Option<Vec<String>>,
+    #[serde(flatten)]
+    command: CommandRequest,
+}
+
+#[derive(Serialize)]
+struct BulkCommandResponse {
+    devices: usize,
+    #[serde(rename = "override")]
+    override_: Option<Override>,
+}
+
+/// One command for several projectors. They share one override, so they all
+/// start the clip from the same moment.
+async fn admin_bulk_command(
+    _: Admin,
+    State(state): State<AppState>,
+    Json(req): Json<BulkCommandRequest>,
+) -> ApiResult<Json<BulkCommandResponse>> {
+    let ids = match req.device_ids {
+        Some(ids) => {
+            for id in &ids {
+                state
+                    .db
+                    .device(id)?
+                    .ok_or_else(|| ApiError::not_found("device"))?;
+            }
+            ids
+        }
+        None => state.db.devices()?.into_iter().map(|d| d.id).collect(),
+    };
+    let ov = req.command.to_override(&state)?;
+    for id in &ids {
+        apply_override(&state, id, ov.as_ref())?;
+    }
+    Ok(Json(BulkCommandResponse {
+        devices: ids.len(),
         override_: ov,
     }))
 }
