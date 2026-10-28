@@ -1,12 +1,19 @@
 name: Release
 
-# Tag a version (git tag v0.5.0 && git push origin v0.5.0) to publish a
-# GitHub release with Pi and PC server builds and the player APK.
+# Publish a GitHub release with Pi and PC server builds and the player APK:
+# either push a tag (git tag v0.5.0 && git push origin v0.5.0), or run this
+# workflow from the Actions tab with a version such as v0.5.0 (it creates
+# the tag on the commit it ran on).
 # Pull requests that touch packaging build everything without publishing.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, e.g. v0.5.0 (empty = build only)"
+        required: false
+        default: ""
   pull_request:
     paths:
       - .github/workflows/release.yml
@@ -14,6 +21,9 @@ on:
 
 permissions:
   contents: write
+
+env:
+  RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.version }}
 
 jobs:
   server:
@@ -72,7 +82,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Build
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export SCENESYNC_VERSION="${GITHUB_REF_NAME#v}"; fi
+          if [[ -n "$RELEASE_TAG" ]]; then export SCENESYNC_VERSION="${RELEASE_TAG#v}"; fi
           ./gradlew :app:assembleRelease
           cp app/build/outputs/apk/release/app-release.apk ../scenesync-player.apk
       - uses: actions/upload-artifact@v4
@@ -82,7 +92,7 @@ jobs:
 
   publish:
     name: Publish release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(inputs.version, 'v')
     needs: [server, apk]
     runs-on: ubuntu-latest
     steps:
@@ -96,4 +106,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -l dist
-          gh release create "$GITHUB_REF_NAME" dist/* deploy/install.sh --title "SceneSync $GITHUB_REF_NAME" --generate-notes
+          gh release create "$RELEASE_TAG" dist/* deploy/install.sh --target "$GITHUB_SHA" --title "SceneSync $RELEASE_TAG" --generate-notes
