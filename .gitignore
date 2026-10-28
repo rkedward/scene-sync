@@ -1,0 +1,9 @@
+/target
+/data
+*.sqlite*
+.scenesync-sim/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+.idea/

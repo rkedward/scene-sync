@@ -1,0 +1,512 @@
+//! SQLite storage. Calls are short, so a single connection behind a mutex is
+//! enough for a home installation.
+
+use std::path::Path;
+use std::sync::Mutex;
+
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use rusqlite::{params, Connection, OptionalExtension};
+use scenesync_core::protocol::DeviceReport;
+use scenesync_core::schedule::{Override, Schedule};
+use serde::Serialize;
+
+pub struct Db {
+    conn: Mutex<Connection>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Device {
+    pub id: String,
+    pub name: String,
+    pub model: Option<String>,
+    pub app_version: Option<String>,
+    pub paired_at: DateTime<Utc>,
+    pub last_seen: Option<DateTime<Utc>>,
+    pub revision: u64,
+    pub report: Option<DeviceReport>,
+    pub schedule: Option<Schedule>,
+    #[serde(rename = "override")]
+    pub override_: Option<Override>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Pairing {
+    pub device_id: String,
+    pub code: String,
+    pub name: String,
+    pub model: Option<String>,
+    pub app_version: Option<String>,
+    pub requested_at: DateTime<Utc>,
+    pub approved: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Media {
+    pub id: String,
+    pub filename: String,
+    pub sha256: String,
+    pub size: u64,
+    pub duration_ms: Option<u64>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub codec: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+const SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS devices (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    model TEXT,
+    app_version TEXT,
+    token_hash TEXT NOT NULL UNIQUE,
+    paired_at TEXT NOT NULL,
+    last_seen TEXT,
+    revision INTEGER NOT NULL DEFAULT 1,
+    report_json TEXT,
+    schedule_json TEXT,
+    override_json TEXT
+);
+CREATE TABLE IF NOT EXISTS pairings (
+    device_id TEXT PRIMARY KEY,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    model TEXT,
+    app_version TEXT,
+    requested_at TEXT NOT NULL,
+    approved INTEGER NOT NULL DEFAULT 0,
+    token TEXT
+);
+CREATE TABLE IF NOT EXISTS media (
+    id TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    duration_ms INTEGER,
+    width INTEGER,
+    height INTEGER,
+    codec TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS device_media (
+    device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+    PRIMARY KEY (device_id, media_id)
+);
+"#;
+
+fn json_col<T: serde::de::DeserializeOwned>(s: Option<String>) -> Option<T> {
+    s.and_then(|s| serde_json::from_str(&s).ok())
+}
+
+fn time_col(s: String) -> DateTime<Utc> {
+    s.parse().unwrap_or_else(|_| Utc::now())
+}
+
+impl Db {
+    pub fn open(path: &Path) -> Result<Self> {
+        let conn = Connection::open(path)?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.execute_batch(SCHEMA)?;
+        Ok(Db {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn.lock().expect("db mutex poisoned")
+    }
+
+    // ---- pairing ---------------------------------------------------------
+
+    /// Records or refreshes a pairing request. Returns the pairing row.
+    pub fn upsert_pairing(
+        &self,
+        device_id: &str,
+        code: &str,
+        name: &str,
+        model: Option<&str>,
+        app_version: Option<&str>,
+    ) -> Result<Pairing> {
+        let c = self.conn();
+        let existing: Option<(String, bool)> = c
+            .query_row(
+                "SELECT code, approved FROM pairings WHERE device_id = ?1",
+                params![device_id],
+                |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0)),
+            )
+            .optional()?;
+        match existing {
+            // Keep an approval only if the device still shows the same code.
+            Some((old_code, true)) if old_code == code => {}
+            _ => {
+                c.execute(
+                    "INSERT INTO pairings (device_id, code, name, model, app_version, requested_at, approved, token)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, NULL)
+                     ON CONFLICT(device_id) DO UPDATE SET code = ?2, name = ?3, model = ?4, app_version = ?5,
+                        requested_at = ?6, approved = 0, token = NULL",
+                    params![device_id, code, name, model, app_version, Utc::now().to_rfc3339()],
+                )?;
+            }
+        }
+        drop(c);
+        Ok(self.pairing(device_id)?.expect("pairing just written"))
+    }
+
+    pub fn pairing(&self, device_id: &str) -> Result<Option<Pairing>> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT device_id, code, name, model, app_version, requested_at, approved FROM pairings WHERE device_id = ?1",
+                params![device_id],
+                pairing_row,
+            )
+            .optional()?)
+    }
+
+    pub fn pending_pairings(&self) -> Result<Vec<Pairing>> {
+        let c = self.conn();
+        let mut st = c.prepare(
+            "SELECT device_id, code, name, model, app_version, requested_at, approved FROM pairings
+             WHERE approved = 0 ORDER BY requested_at DESC",
+        )?;
+        let rows = st
+            .query_map([], pairing_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Approves the pending pairing with this code: creates the device and
+    /// stores the token for the device's next poll. Returns the device ID.
+    pub fn approve_pairing(
+        &self,
+        code: &str,
+        name: Option<&str>,
+        token: &str,
+        token_hash: &str,
+    ) -> Result<Option<String>> {
+        let mut c = self.conn();
+        let tx = c.transaction()?;
+        let row: Option<(String, String, Option<String>, Option<String>)> = tx
+            .query_row(
+                "SELECT device_id, name, model, app_version FROM pairings WHERE code = ?1 AND approved = 0
+                 ORDER BY requested_at DESC LIMIT 1",
+                params![code],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        let Some((device_id, req_name, model, app_version)) = row else {
+            return Ok(None);
+        };
+        let name = name
+            .filter(|n| !n.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or(req_name);
+        tx.execute(
+            "INSERT INTO devices (id, name, model, app_version, token_hash, paired_at, revision)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
+             ON CONFLICT(id) DO UPDATE SET name = ?2, model = ?3, app_version = ?4, token_hash = ?5,
+                revision = devices.revision + 1",
+            params![
+                device_id,
+                name,
+                model,
+                app_version,
+                token_hash,
+                Utc::now().to_rfc3339()
+            ],
+        )?;
+        tx.execute(
+            "UPDATE pairings SET approved = 1, token = ?2 WHERE device_id = ?1",
+            params![device_id, token],
+        )?;
+        tx.commit()?;
+        Ok(Some(device_id))
+    }
+
+    /// Hands out the token once, then forgets it.
+    pub fn take_pairing_token(&self, device_id: &str) -> Result<Option<String>> {
+        let c = self.conn();
+        let token: Option<Option<String>> = c
+            .query_row(
+                "SELECT token FROM pairings WHERE device_id = ?1 AND approved = 1",
+                params![device_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let token = token.flatten();
+        if token.is_some() {
+            c.execute(
+                "DELETE FROM pairings WHERE device_id = ?1",
+                params![device_id],
+            )?;
+        }
+        Ok(token)
+    }
+
+    // ---- devices ---------------------------------------------------------
+
+    pub fn device_by_token_hash(&self, token_hash: &str) -> Result<Option<Device>> {
+        let id: Option<String> = self
+            .conn()
+            .query_row(
+                "SELECT id FROM devices WHERE token_hash = ?1",
+                params![token_hash],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match id {
+            Some(id) => self.device(&id),
+            None => Ok(None),
+        }
+    }
+
+    pub fn device(&self, id: &str) -> Result<Option<Device>> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT id, name, model, app_version, paired_at, last_seen, revision, report_json, schedule_json, override_json
+                 FROM devices WHERE id = ?1",
+                params![id],
+                device_row,
+            )
+            .optional()?)
+    }
+
+    pub fn devices(&self) -> Result<Vec<Device>> {
+        let c = self.conn();
+        let mut st = c.prepare(
+            "SELECT id, name, model, app_version, paired_at, last_seen, revision, report_json, schedule_json, override_json
+             FROM devices ORDER BY name",
+        )?;
+        let rows = st
+            .query_map([], device_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn delete_device(&self, id: &str) -> Result<bool> {
+        Ok(self
+            .conn()
+            .execute("DELETE FROM devices WHERE id = ?1", params![id])?
+            > 0)
+    }
+
+    pub fn rename_device(&self, id: &str, name: &str) -> Result<Option<u64>> {
+        self.conn().execute(
+            "UPDATE devices SET name = ?2 WHERE id = ?1",
+            params![id, name],
+        )?;
+        self.bump_revision(id)
+    }
+
+    pub fn touch_device(&self, id: &str) -> Result<()> {
+        self.conn().execute(
+            "UPDATE devices SET last_seen = ?2 WHERE id = ?1",
+            params![id, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_report(&self, id: &str, report: &DeviceReport) -> Result<()> {
+        self.conn().execute(
+            "UPDATE devices SET report_json = ?2, last_seen = ?3, app_version = COALESCE(?4, app_version) WHERE id = ?1",
+            params![id, serde_json::to_string(report)?, Utc::now().to_rfc3339(), report.app_version],
+        )?;
+        Ok(())
+    }
+
+    /// Increments the device's config revision. Returns the new revision.
+    pub fn bump_revision(&self, id: &str) -> Result<Option<u64>> {
+        let c = self.conn();
+        c.execute(
+            "UPDATE devices SET revision = revision + 1 WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(c.query_row(
+            "SELECT revision FROM devices WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?
+        .map(|v| v as u64))
+    }
+
+    pub fn set_override(&self, id: &str, ov: Option<&Override>) -> Result<Option<u64>> {
+        let json = ov.map(serde_json::to_string).transpose()?;
+        self.conn().execute(
+            "UPDATE devices SET override_json = ?2 WHERE id = ?1",
+            params![id, json],
+        )?;
+        self.bump_revision(id)
+    }
+
+    pub fn set_schedule(&self, id: &str, schedule: Option<&Schedule>) -> Result<Option<u64>> {
+        let json = schedule.map(serde_json::to_string).transpose()?;
+        self.conn().execute(
+            "UPDATE devices SET schedule_json = ?2 WHERE id = ?1",
+            params![id, json],
+        )?;
+        self.bump_revision(id)
+    }
+
+    // ---- media -----------------------------------------------------------
+
+    pub fn insert_media(&self, m: &Media) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO media (id, filename, sha256, size, duration_ms, width, height, codec, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                m.id,
+                m.filename,
+                m.sha256,
+                m.size as i64,
+                m.duration_ms.map(|v| v as i64),
+                m.width,
+                m.height,
+                m.codec,
+                m.created_at.to_rfc3339()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn media_exists(&self, id: &str) -> Result<bool> {
+        Ok(self
+            .conn()
+            .query_row("SELECT 1 FROM media WHERE id = ?1", params![id], |_| Ok(()))
+            .optional()?
+            .is_some())
+    }
+
+    pub fn media(&self, id: &str) -> Result<Option<Media>> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT id, filename, sha256, size, duration_ms, width, height, codec, created_at FROM media WHERE id = ?1",
+                params![id],
+                media_row,
+            )
+            .optional()?)
+    }
+
+    pub fn all_media(&self) -> Result<Vec<Media>> {
+        let c = self.conn();
+        let mut st = c.prepare(
+            "SELECT id, filename, sha256, size, duration_ms, width, height, codec, created_at FROM media ORDER BY created_at DESC",
+        )?;
+        let rows = st
+            .query_map([], media_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Deletes a clip. Returns the IDs of devices whose config changed.
+    pub fn delete_media(&self, id: &str) -> Result<Option<(Media, Vec<String>)>> {
+        let Some(m) = self.media(id)? else {
+            return Ok(None);
+        };
+        let devices = {
+            let c = self.conn();
+            let mut st = c.prepare("SELECT device_id FROM device_media WHERE media_id = ?1")?;
+            let ids = st
+                .query_map(params![id], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            drop(st);
+            c.execute("DELETE FROM media WHERE id = ?1", params![id])?;
+            ids
+        };
+        for d in &devices {
+            self.bump_revision(d)?;
+        }
+        Ok(Some((m, devices)))
+    }
+
+    /// Clips assigned to a device.
+    pub fn device_media(&self, device_id: &str) -> Result<Vec<Media>> {
+        let c = self.conn();
+        let mut st = c.prepare(
+            "SELECT m.id, m.filename, m.sha256, m.size, m.duration_ms, m.width, m.height, m.codec, m.created_at
+             FROM media m JOIN device_media dm ON dm.media_id = m.id WHERE dm.device_id = ?1 ORDER BY m.id",
+        )?;
+        let rows = st
+            .query_map(params![device_id], media_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Replaces the device's assigned clips. Returns the new revision.
+    pub fn set_device_media(&self, device_id: &str, media_ids: &[String]) -> Result<Option<u64>> {
+        {
+            let mut c = self.conn();
+            let tx = c.transaction()?;
+            tx.execute(
+                "DELETE FROM device_media WHERE device_id = ?1",
+                params![device_id],
+            )?;
+            for m in media_ids {
+                tx.execute(
+                    "INSERT OR IGNORE INTO device_media (device_id, media_id) VALUES (?1, ?2)",
+                    params![device_id, m],
+                )?;
+            }
+            tx.commit()?;
+        }
+        self.bump_revision(device_id)
+    }
+
+    /// Adds clips to a device's assignment without bumping the revision.
+    pub fn add_device_media(&self, device_id: &str, media_ids: &[&str]) -> Result<()> {
+        let c = self.conn();
+        for m in media_ids {
+            c.execute(
+                "INSERT OR IGNORE INTO device_media (device_id, media_id) VALUES (?1, ?2)",
+                params![device_id, m],
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn pairing_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Pairing> {
+    Ok(Pairing {
+        device_id: r.get(0)?,
+        code: r.get(1)?,
+        name: r.get(2)?,
+        model: r.get(3)?,
+        app_version: r.get(4)?,
+        requested_at: time_col(r.get(5)?),
+        approved: r.get::<_, i64>(6)? != 0,
+    })
+}
+
+fn device_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Device> {
+    Ok(Device {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        model: r.get(2)?,
+        app_version: r.get(3)?,
+        paired_at: time_col(r.get(4)?),
+        last_seen: r.get::<_, Option<String>>(5)?.map(time_col),
+        revision: r.get::<_, i64>(6)? as u64,
+        report: json_col(r.get(7)?),
+        schedule: json_col(r.get(8)?),
+        override_: json_col(r.get(9)?),
+    })
+}
+
+fn media_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Media> {
+    Ok(Media {
+        id: r.get(0)?,
+        filename: r.get(1)?,
+        sha256: r.get(2)?,
+        size: r.get::<_, i64>(3)? as u64,
+        duration_ms: r.get::<_, Option<i64>>(4)?.map(|v| v as u64),
+        width: r.get(5)?,
+        height: r.get(6)?,
+        codec: r.get(7)?,
+        created_at: time_col(r.get(8)?),
+    })
+}
