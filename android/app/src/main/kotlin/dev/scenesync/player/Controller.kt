@@ -156,10 +156,11 @@ class Controller(private val context: Context) {
                 http.newCall(Request.Builder().url("$server/api/v1/pair").post(body).build()).execute().use { res ->
                     if (res.isSuccessful) {
                         val r = SceneSyncJson.decodeFromString(PairResponse.serializer(), res.body!!.string())
-                        if (r.status == "approved" && r.token != null) {
-                            prefs.token = r.token
+                        val token = r.token
+                        if (r.status == "approved" && token != null) {
+                            prefs.token = token
                             prefs.clearPairingCode()
-                            return r.token
+                            return token
                         }
                     } else {
                         _status.value = _status.value.copy(message = "Server error ${res.code} while pairing; retrying")
