@@ -1,0 +1,24 @@
+# systemd unit for the SceneSync server on a Raspberry Pi.
+# Install:
+#   sudo cp target/release/scenesync-server /usr/local/bin/
+#   sudo useradd --system --home /var/lib/scenesync --create-home scenesync
+#   sudo cp deploy/scenesync.service /etc/systemd/system/
+#   sudo systemctl enable --now scenesync
+# The dashboard password is printed in the log on first start
+# (journalctl -u scenesync) and saved in /var/lib/scenesync/admin_password.
+[Unit]
+Description=SceneSync server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=scenesync
+WorkingDirectory=/var/lib/scenesync
+Environment=SCENESYNC_DATA_DIR=/var/lib/scenesync
+Environment=SCENESYNC_LISTEN=0.0.0.0:8080
+ExecStart=/usr/local/bin/scenesync-server
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
