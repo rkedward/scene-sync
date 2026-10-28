@@ -261,6 +261,14 @@ async fn update_config(p: &Player) -> Result<()> {
     // Every clip is present: apply atomically.
     write_json(&p.args.state_dir.join("config.json"), &cfg).await?;
     println!("Applied config revision {}", cfg.revision);
+    if let Some(sync) = &cfg.sync {
+        println!(
+            "  In sync group {} ({}, trim {} ms)",
+            sync.group_id,
+            if sync.muted { "muted" } else { "plays sound" },
+            sync.trim_ms
+        );
+    }
     if cfg.calibrate {
         println!("  Showing the calibration pattern (fit to window)");
     }

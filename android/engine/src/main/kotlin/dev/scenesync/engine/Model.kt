@@ -172,6 +172,17 @@ data class DeviceConfig(
     val calibrate: Boolean = false,
     /** The player APK every projector should run. */
     @SerialName("app_update") val appUpdate: AppRelease? = null,
+    /** Present when this projector plays in sync with its group. */
+    val sync: SyncConfig? = null,
+)
+
+@Serializable
+data class SyncConfig(
+    @SerialName("group_id") val groupId: String,
+    /** In a group only one projector plays sound. */
+    val muted: Boolean = false,
+    /** Shifts this projector earlier (+) or later (-) to match the others. */
+    @SerialName("trim_ms") val trimMs: Long = 0,
 )
 
 @Serializable
@@ -199,6 +210,8 @@ data class DeviceReport(
     @SerialName("clock_offset_ms") val clockOffsetMs: Long? = null,
     @SerialName("app_version") val appVersion: String? = null,
     @SerialName("app_sha256") val appSha256: String? = null,
+    /** Average distance from the group's shared timeline, when in a sync group. */
+    @SerialName("sync_error_ms") val syncErrorMs: Long? = null,
     val errors: List<String> = emptyList(),
 )
 

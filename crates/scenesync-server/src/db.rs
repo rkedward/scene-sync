@@ -33,6 +33,7 @@ pub struct Device {
     pub mapping: Option<Mapping>,
     pub calibrate: bool,
     pub group_id: Option<String>,
+    pub trim_ms: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -40,6 +41,10 @@ pub struct Group {
     pub id: String,
     pub name: String,
     pub schedule_id: Option<String>,
+    /// Members play in sync.
+    pub sync: bool,
+    /// The member that plays sound when in sync (default: the first).
+    pub audio_device_id: Option<String>,
     /// Member device IDs.
     pub devices: Vec<String>,
 }
@@ -138,6 +143,19 @@ fn migrate(conn: &Connection) -> Result<()> {
     }
     if !has_column("devices", "group_id")? {
         conn.execute("ALTER TABLE devices ADD COLUMN group_id TEXT", [])?;
+    }
+    if !has_column("devices", "trim_ms")? {
+        conn.execute(
+            "ALTER TABLE devices ADD COLUMN trim_ms INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !has_column("groups", "sync")? {
+        conn.execute(
+            "ALTER TABLE groups ADD COLUMN sync INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+        conn.execute("ALTER TABLE groups ADD COLUMN audio_device TEXT", [])?;
     }
     if !has_column("devices", "mapping_json")? {
         conn.execute("ALTER TABLE devices ADD COLUMN mapping_json TEXT", [])?;
@@ -319,7 +337,7 @@ impl Db {
         Ok(self
             .conn()
             .query_row(
-                "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id, d.mapping_json, d.calibrate, d.group_id
+                "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id, d.mapping_json, d.calibrate, d.group_id, d.trim_ms
                  FROM devices d LEFT JOIN schedules s ON s.id = d.schedule_id WHERE d.id = ?1",
                 params![id],
                 device_row,
@@ -330,7 +348,7 @@ impl Db {
     pub fn devices(&self) -> Result<Vec<Device>> {
         let c = self.conn();
         let mut st = c.prepare(
-            "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id, d.mapping_json, d.calibrate, d.group_id
+            "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id, d.mapping_json, d.calibrate, d.group_id, d.trim_ms
              FROM devices d LEFT JOIN schedules s ON s.id = d.schedule_id ORDER BY d.name",
         )?;
         let rows = st
@@ -495,13 +513,17 @@ impl Db {
 
     pub fn groups(&self) -> Result<Vec<Group>> {
         let c = self.conn();
-        let mut st = c.prepare("SELECT id, name, schedule_id FROM groups ORDER BY name")?;
+        let mut st = c.prepare(
+            "SELECT id, name, schedule_id, sync, audio_device FROM groups ORDER BY name",
+        )?;
         let mut groups = st
             .query_map([], |r| {
                 Ok(Group {
                     id: r.get(0)?,
                     name: r.get(1)?,
                     schedule_id: r.get(2)?,
+                    sync: r.get::<_, i64>(3)? != 0,
+                    audio_device_id: r.get(4)?,
                     devices: Vec::new(),
                 })
             })?
@@ -556,6 +578,22 @@ impl Db {
             params![id, schedule_id],
         )?;
         Ok(())
+    }
+
+    pub fn set_group_sync(&self, id: &str, sync: bool, audio_device: Option<&str>) -> Result<()> {
+        self.conn().execute(
+            "UPDATE groups SET sync = ?2, audio_device = ?3 WHERE id = ?1",
+            params![id, sync as i64, audio_device],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_trim(&self, id: &str, trim_ms: i64) -> Result<Option<u64>> {
+        self.conn().execute(
+            "UPDATE devices SET trim_ms = ?2 WHERE id = ?1",
+            params![id, trim_ms],
+        )?;
+        self.bump_revision(id)
     }
 
     /// Groups whose schedule is `schedule_id`.
@@ -714,6 +752,7 @@ fn device_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Device> {
         mapping: json_col(r.get(11)?),
         calibrate: r.get::<_, i64>(12)? != 0,
         group_id: r.get(13)?,
+        trim_ms: r.get(14)?,
     })
 }
 

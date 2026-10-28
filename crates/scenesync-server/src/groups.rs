@@ -121,3 +121,89 @@ pub(crate) async fn set_device_group(
     }
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[derive(Deserialize)]
+pub(crate) struct SyncRequest {
+    sync: bool,
+    /// Member that plays sound; `null` = the first member.
+    #[serde(default)]
+    audio_device_id: Option<String>,
+}
+
+/// Turns synchronized playback on or off for a group.
+pub(crate) async fn set_sync(
+    _: Admin,
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+    Json(req): Json<SyncRequest>,
+) -> ApiResult<StatusCode> {
+    let group = state
+        .db
+        .group(&id)?
+        .ok_or_else(|| ApiError::not_found("group"))?;
+    if let Some(a) = &req.audio_device_id {
+        if !group.devices.contains(a) {
+            return Err(ApiError::bad_request(
+                "the sound projector must be in the group",
+            ));
+        }
+    }
+    state
+        .db
+        .set_group_sync(&id, req.sync, req.audio_device_id.as_deref())?;
+    for d in &group.devices {
+        let rev = state.db.bump_revision(d)?;
+        state.notify(d, rev);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub(crate) struct TrimRequest {
+    trim_ms: i64,
+}
+
+/// Per-projector latency trim for sync groups.
+pub(crate) async fn set_trim(
+    _: Admin,
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+    Json(req): Json<TrimRequest>,
+) -> ApiResult<StatusCode> {
+    if !(-2000..=2000).contains(&req.trim_ms) {
+        return Err(ApiError::bad_request(
+            "trim must be between -2000 and 2000 ms",
+        ));
+    }
+    let rev = state
+        .db
+        .set_trim(&id, req.trim_ms)?
+        .ok_or_else(|| ApiError::not_found("device"))?;
+    state.notify(&id, Some(rev));
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The sync settings to put in a device's config, if its group plays in sync.
+pub(crate) fn sync_config(
+    state: &AppState,
+    d: &crate::db::Device,
+) -> ApiResult<Option<scenesync_core::protocol::SyncConfig>> {
+    let Some(gid) = &d.group_id else {
+        return Ok(None);
+    };
+    let Some(g) = state.db.group(gid)? else {
+        return Ok(None);
+    };
+    if !g.sync {
+        return Ok(None);
+    }
+    let audio = g
+        .audio_device_id
+        .filter(|a| g.devices.contains(a))
+        .or_else(|| g.devices.first().cloned());
+    Ok(Some(scenesync_core::protocol::SyncConfig {
+        group_id: g.id,
+        muted: audio.as_deref() != Some(d.id.as_str()),
+        trim_ms: d.trim_ms,
+    }))
+}

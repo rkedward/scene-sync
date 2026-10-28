@@ -60,6 +60,8 @@ Removing a device in the dashboard invalidates its token; the player gets `401` 
 
 `app_update` (optional) is the player APK every projector should run. A player compares its SHA-256 with that of its own installed package; if they differ, it downloads, verifies, and installs it (Android may ask once on screen; later updates are silent, and fully silent if the app is device owner). A release that fails to install is not retried until a different one is uploaded. Players report their package hash as `app_sha256`.
 
+`sync` (optional) is present when the projector's group plays in sync: `{"group_id": "windows", "muted": true, "trim_ms": 0}`. In a sync group, a player treats every clip as running on a shared timeline: the clip should be at `(server_now - anchor + trim_ms)`, modulo its length for loops. Each player compares that with its real position a few times a second, plays up to 5% faster or slower to close small gaps, and seeks (a little ahead, learning how long its seeks take) for gaps over 400 ms. It reports its average gap as `sync_error_ms`. Only the unmuted projector plays sound.
+
 `mapping` (optional) is fit to window: where the video's top-left, top-right, bottom-right and bottom-left corners land, as fractions of the projector image (0,0 is its top-left). The player warps the video onto that shape and leaves everything else black. Without it, clips are letterboxed to fill the image. `calibrate: true` asks the player to show the calibration pattern (white border, 10% grid, corners numbered 1 to 4 clockwise from top-left, and the current `mapping` outlined in orange) instead of video.
 
 A player downloads every clip in `media`, checks each SHA-256, and only then switches to the new revision. Until then it keeps the previous one. Clips not listed in the applied config may be deleted.
@@ -115,7 +117,9 @@ All under `/api/v1/admin/`, Basic auth.
 | `DELETE groups/{id}` | Delete a group; its projectors keep their schedules |
 | `PUT groups/{id}/schedule` | `{"schedule_id": "night" \| null}`: sets the group's schedule and gives it to every member |
 | `PUT devices/{id}/group` | `{"group_id": "garage" \| null}`: joining a group with a schedule takes that schedule |
-| `POST command` | One command for many projectors: `{"device_ids": [...] \| null (all), "action": …, "hold": false}`. All get the same override, so clips start from the same moment. |
+| `POST command` | One command for many projectors: `{"device_ids": [...] \| null (all), "action": …, "hold": false, "start_in_ms": 1500}`. All get the same override, so clips start from the same moment; `start_in_ms` (up to 10000) sets that moment slightly in the future so every projector has the command first. |
+| `PUT groups/{id}/sync` | `{"sync": true, "audio_device_id": "…" \| null}`: play in sync; sound from one member (default the first) |
+| `PUT devices/{id}/trim` | `{"trim_ms": 40}`: shift one projector's timeline (-2000 to 2000) to make up for display latency |
 | `GET app`, `POST app` (multipart `file`), `DELETE app` | The player APK offered to every projector |
 | `GET pairings` | Pending pairing requests |
 | `POST pairings/approve` | `{"code": "123456", "name": "optional"}` |
