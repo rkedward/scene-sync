@@ -6,7 +6,7 @@ Schedule and play video clips on several projectors around a house, controlled f
 - Each projector runs the **SceneSync Player** Android app. It downloads its clips and schedule and keeps playing them if the Pi or Wi-Fi goes down.
 - A **test player** (`scenesync-sim`) runs the same protocol on a laptop, so you can try everything without a projector.
 
-Status: Phase 2 (schedules and offline resilience). See [docs/roadmap.md](docs/roadmap.md).
+Status: Phase 2b (schedules, offline resilience, fit to window). See [docs/roadmap.md](docs/roadmap.md).
 
 ## Repository layout
 
@@ -64,6 +64,10 @@ adb install -r scenesync-player-debug.apk
 Then open **SceneSync Player**. It looks for the server, shows a 6-digit code, and waits for you to enter it in the dashboard.
 
 For a permanent setup, make SceneSync Player the projector's **home app** (Android asks which home app to use when you press the Home button). That is the most reliable way for it to come back after a reboot or power cut on Android 14. While it is the home app, press **Back three times quickly** to open system settings. Any other remote key shows the status overlay for 10 seconds.
+
+## Fit a clip to a window
+
+On the projector card, press **Fit to window** and follow the steps. In short: reset the projector's keystone, press **Show pattern**, take a phone photo of the wall, load it, click the four numbered corners of the pattern and then the four corners of the window. Drag the corners to fine-tune while watching the orange outline on the wall, then press **Done**. The photo stays in your browser; only the four corners are saved.
 
 ## Tests
 

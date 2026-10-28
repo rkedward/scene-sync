@@ -26,7 +26,7 @@ use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
 use scenesync_core::protocol::{
-    DeviceConfig, DeviceReport, IdleMode, MediaRef, PairRequest, PairResponse, PairStatus,
+    DeviceConfig, DeviceReport, IdleMode, Mapping, MediaRef, PairRequest, PairResponse, PairStatus,
     ServerMessage, TimeResponse, PROTOCOL_VERSION,
 };
 use scenesync_core::schedule::{evaluate, Desired, EvalInput, Override, OverrideAction, Schedule};
@@ -151,6 +151,11 @@ pub fn app(state: AppState) -> Router {
             put(admin_set_device_media),
         )
         .route("/api/v1/admin/devices/{id}/command", post(admin_command))
+        .route("/api/v1/admin/devices/{id}/mapping", put(admin_set_mapping))
+        .route(
+            "/api/v1/admin/devices/{id}/calibrate",
+            put(admin_set_calibrate),
+        )
         .route(
             "/api/v1/admin/devices/{id}/schedule",
             put(schedules::set_device_schedule),
@@ -415,6 +420,8 @@ fn build_config(state: &AppState, d: &Device) -> ApiResult<DeviceConfig> {
         schedule: d.schedule.clone(),
         override_: d.override_.clone(),
         idle: IdleMode::Black,
+        mapping: d.mapping.clone(),
+        calibrate: d.calibrate,
     })
 }
 
@@ -585,6 +592,49 @@ async fn admin_rename_device(
     let rev = state
         .db
         .rename_device(&id, name)?
+        .ok_or_else(|| ApiError::not_found("device"))?;
+    state.notify(&id, Some(rev));
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct MappingRequest {
+    mapping: Option<Mapping>,
+}
+
+/// Sets (or clears, with `null`) the fit-to-window corners.
+async fn admin_set_mapping(
+    _: Admin,
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+    Json(req): Json<MappingRequest>,
+) -> ApiResult<StatusCode> {
+    if let Some(m) = &req.mapping {
+        m.validate().map_err(ApiError::bad_request)?;
+    }
+    let rev = state
+        .db
+        .set_mapping(&id, req.mapping.as_ref())?
+        .ok_or_else(|| ApiError::not_found("device"))?;
+    state.notify(&id, Some(rev));
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct CalibrateRequest {
+    on: bool,
+}
+
+/// Shows or hides the calibration pattern on the projector.
+async fn admin_set_calibrate(
+    _: Admin,
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+    Json(req): Json<CalibrateRequest>,
+) -> ApiResult<StatusCode> {
+    let rev = state
+        .db
+        .set_calibrate(&id, req.on)?
         .ok_or_else(|| ApiError::not_found("device"))?;
     state.notify(&id, Some(rev));
     Ok(StatusCode::NO_CONTENT)

@@ -166,7 +166,18 @@ data class DeviceConfig(
     val schedule: Schedule? = null,
     @SerialName("override") val override: Override? = null,
     val idle: String = "black",
+    /** Fit to window. Null = full frame. */
+    val mapping: Mapping? = null,
+    /** Show the calibration pattern instead of video. */
+    val calibrate: Boolean = false,
 )
+
+/**
+ * Where the video's top-left, top-right, bottom-right and bottom-left
+ * corners land, as fractions of the projector image (0,0 top-left).
+ */
+@Serializable
+data class Mapping(val corners: List<List<Double>>)
 
 @Serializable
 data class TimeResponse(@SerialName("server_time_ms") val serverTimeMs: Long)

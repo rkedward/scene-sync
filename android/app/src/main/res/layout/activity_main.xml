@@ -6,15 +6,18 @@
     android:background="@android:color/black"
     android:keepScreenOn="true">
 
-    <androidx.media3.ui.PlayerView
-        android:id="@+id/player_view"
+    <!-- Video. Drawn through a transform so it can be letterboxed or warped onto a window. -->
+    <TextureView
+        android:id="@+id/video_view"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:visibility="invisible"
-        app:use_controller="false"
-        app:shutter_background_color="@android:color/black"
-        app:resize_mode="fit"
-        app:surface_type="surface_view" />
+        android:visibility="invisible" />
+
+    <dev.scenesync.player.CalibrationView
+        android:id="@+id/calibration"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
 
     <!-- Pairing code and status. Hidden during normal playback; any remote key shows it briefly. -->
     <LinearLayout

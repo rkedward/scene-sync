@@ -50,9 +50,13 @@ Removing a device in the dashboard invalidates its token; the player gets `401` 
   "schedule": { "schedule_id": "evening-effects", "revision": 12, "timezone": "America/Denver", "rules": [ … ] },
   "override": { "override_id": "ab12", "action": { "type": "play", "media_id": "ghost", "loop": true },
                 "issued_at": "2026-10-31T01:05:00Z", "hold": false },
-  "idle": "black"
+  "idle": "black",
+  "mapping": { "corners": [[0.30, 0.20], [0.62, 0.25], [0.60, 0.80], [0.31, 0.75]] },
+  "calibrate": false
 }
 ```
+
+`mapping` (optional) is fit to window: where the video's top-left, top-right, bottom-right and bottom-left corners land, as fractions of the projector image (0,0 is its top-left). The player warps the video onto that shape and leaves everything else black. Without it, clips are letterboxed to fill the image. `calibrate: true` asks the player to show the calibration pattern (white border, 10% grid, corners numbered 1 to 4 clockwise from top-left, and the current `mapping` outlined in orange) instead of video.
 
 A player downloads every clip in `media`, checks each SHA-256, and only then switches to the new revision. Until then it keeps the previous one. Clips not listed in the applied config may be deleted.
 
@@ -95,6 +99,8 @@ All under `/api/v1/admin/`, Basic auth.
 | `PUT devices/{id}/media` | Set assigned clips: `{"media_ids": [...]}` (clips in use are kept) |
 | `POST devices/{id}/command` | Manual override: `{"action": {"type":"play","media_id":"x","loop":true} \| {"type":"stop"} \| null, "hold": false, "max_duration_ms": null}`. `null` returns to the schedule. |
 | `PUT devices/{id}/schedule` | Assign a saved schedule, or clear it: `{"schedule_id": "evening" \| null}`. Clips it uses are assigned automatically. |
+| `PUT devices/{id}/mapping` | Fit to window: `{"mapping": {"corners": [[x,y] ×4]}}` or `{"mapping": null}`. Corners must form a convex shape, clockwise from top-left, within -0.5 to 1.5. |
+| `PUT devices/{id}/calibrate` | Show or hide the calibration pattern: `{"on": true}` |
 | `GET devices/{id}/preview?at=…` | What the engine says should play at a given time |
 | `GET schedules` | Saved schedules, each with `devices` (IDs of projectors using it) |
 | `PUT schedules/{id}` | Create or replace a schedule (body as in "Schedule format"; `schedule_id` and `revision` are set by the server). Every projector using it gets the new version. Unknown clips or invalid rules return `400`. |
