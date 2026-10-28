@@ -2,6 +2,7 @@
 //! [`app`] directly.
 
 mod app_update;
+pub mod backup;
 pub mod db;
 mod groups;
 pub mod mdns;
@@ -178,6 +179,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/v1/admin/groups/{id}/sync", put(groups::set_sync))
         .route("/api/v1/admin/devices/{id}/trim", put(groups::set_trim))
         .route("/api/v1/admin/command", post(admin_bulk_command))
+        .route("/api/v1/admin/backup", get(backup::download))
         .route(
             "/api/v1/admin/app",
             get(app_update::info)
@@ -201,6 +203,7 @@ pub fn app(state: AppState) -> Router {
 
     Router::new()
         .route("/api/v1/time", get(time))
+        .route("/api/v1/version", get(version))
         .route("/api/v1/pair", post(pair))
         .route("/api/v1/media/{id}/content", get(media_content))
         .route(app_update::APK_URL, get(app_update::download))
@@ -386,6 +389,12 @@ async fn pair(
         status: PairStatus::Pending,
         token: None,
     }))
+}
+
+async fn version() -> Json<serde_json::Value> {
+    Json(
+        serde_json::json!({ "version": env!("CARGO_PKG_VERSION"), "protocol_version": PROTOCOL_VERSION }),
+    )
 }
 
 async fn media_content(

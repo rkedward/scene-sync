@@ -185,6 +185,15 @@ impl Db {
         })
     }
 
+    /// Writes a consistent copy of the database to `path` (which must not exist).
+    pub fn backup_to(&self, path: &Path) -> Result<()> {
+        let p = path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("backup path is not UTF-8"))?;
+        self.conn().execute("VACUUM INTO ?1", params![p])?;
+        Ok(())
+    }
+
     fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().expect("db mutex poisoned")
     }

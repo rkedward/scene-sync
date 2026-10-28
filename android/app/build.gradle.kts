@@ -15,7 +15,7 @@ android {
         targetSdk = 34
         // CI builds count up, so a newer build can always replace an older one.
         versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()?.plus(100) ?: 1
-        versionName = "0.3.0"
+        versionName = System.getenv("SCENESYNC_VERSION") ?: "0.5.0"
     }
 
     signingConfigs {

@@ -1,0 +1,99 @@
+name: Release
+
+# Tag a version (git tag v0.5.0 && git push origin v0.5.0) to publish a
+# GitHub release with Pi and PC server builds and the player APK.
+# Pull requests that touch packaging build everything without publishing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - deploy/**
+
+permissions:
+  contents: write
+
+jobs:
+  server:
+    name: Server (${{ matrix.target }})
+    # Ubuntu 22.04's glibc (2.35) is older than Raspberry Pi OS Bookworm's (2.36),
+    # so the binaries run on both.
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-gnu
+            name: linux-arm64
+          - target: x86_64-unknown-linux-gnu
+            name: linux-x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Cross compiler
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+        run: cargo build --release --locked -p scenesync-server -p scenesync-sim --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          dir=scenesync-${{ matrix.name }}
+          mkdir -p "$dir"
+          cp target/${{ matrix.target }}/release/scenesync-server target/${{ matrix.target }}/release/scenesync-sim "$dir/"
+          cp deploy/scenesync.service deploy/install.sh README.md docs/operations.md "$dir/"
+          tar czf "$dir.tar.gz" "$dir"
+          file "$dir/scenesync-server"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scenesync-${{ matrix.name }}
+          path: scenesync-${{ matrix.name }}.tar.gz
+
+  apk:
+    name: Player APK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export SCENESYNC_VERSION="${GITHUB_REF_NAME#v}"; fi
+          ./gradlew :app:assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk ../scenesync-player.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scenesync-player-apk
+          path: scenesync-player.apk
+
+  publish:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [server, apk]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l dist
+          gh release create "$GITHUB_REF_NAME" dist/* deploy/install.sh --title "SceneSync $GITHUB_REF_NAME" --generate-notes
