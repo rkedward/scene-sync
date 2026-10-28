@@ -662,3 +662,99 @@ async fn groups_bulk_commands_and_app_updates() {
     assert_eq!(res.status(), 204);
     assert!(config(t2).await.schedule.is_some());
 }
+
+#[tokio::test]
+async fn sync_groups() {
+    let (base, _dir) = start().await;
+    let http = reqwest::Client::new();
+    let admin = |rb: reqwest::RequestBuilder| rb.basic_auth("admin", Some("secret"));
+    let ta = pair(&base, &http, "a", "200001").await;
+    let tb = pair(&base, &http, "b", "200002").await;
+    let config = |token: String| {
+        let http = http.clone();
+        let base = base.clone();
+        async move {
+            http.get(format!("{base}/api/v1/device/config"))
+                .bearer_auth(token)
+                .send()
+                .await
+                .unwrap()
+                .json::<DeviceConfig>()
+                .await
+                .unwrap()
+        }
+    };
+    admin(http.put(format!("{base}/api/v1/admin/groups/windows")))
+        .json(&json!({ "name": "Windows" }))
+        .send()
+        .await
+        .unwrap();
+    for d in ["a", "b"] {
+        admin(http.put(format!("{base}/api/v1/admin/devices/{d}/group")))
+            .json(&json!({ "group_id": "windows" }))
+            .send()
+            .await
+            .unwrap();
+    }
+    assert!(config(ta.clone()).await.sync.is_none());
+
+    // Sound from a projector outside the group is refused.
+    let res = admin(http.put(format!("{base}/api/v1/admin/groups/windows/sync")))
+        .json(&json!({ "sync": true, "audio_device_id": "zzz" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    let res = admin(http.put(format!("{base}/api/v1/admin/groups/windows/sync")))
+        .json(&json!({ "sync": true, "audio_device_id": "b" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    let (ca, cb) = (config(ta.clone()).await, config(tb.clone()).await);
+    assert!(ca.sync.as_ref().unwrap().muted);
+    assert!(!cb.sync.as_ref().unwrap().muted);
+
+    let res = admin(http.put(format!("{base}/api/v1/admin/devices/a/trim")))
+        .json(&json!({ "trim_ms": 5000 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    admin(http.put(format!("{base}/api/v1/admin/devices/a/trim")))
+        .json(&json!({ "trim_ms": 40 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(config(ta.clone()).await.sync.unwrap().trim_ms, 40);
+
+    // A synced start is scheduled slightly in the future, the same for both.
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(vec![5u8; 1000]).file_name("ghost.mp4"),
+    );
+    admin(http.post(format!("{base}/api/v1/admin/media")))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    let before = chrono::Utc::now();
+    admin(http.post(format!("{base}/api/v1/admin/command")))
+        .json(&json!({ "device_ids": ["a", "b"], "start_in_ms": 1500,
+                       "action": { "type": "play", "media_id": "ghost", "loop": true } }))
+        .send()
+        .await
+        .unwrap();
+    let (ca, cb) = (config(ta.clone()).await, config(tb).await);
+    let oa = ca.override_.unwrap();
+    assert_eq!(Some(&oa), cb.override_.as_ref());
+    assert!(oa.issued_at >= before + chrono::Duration::milliseconds(1400));
+
+    // Sync off: no sync settings.
+    admin(http.put(format!("{base}/api/v1/admin/groups/windows/sync")))
+        .json(&json!({ "sync": false }))
+        .send()
+        .await
+        .unwrap();
+    assert!(config(ta).await.sync.is_none());
+}

@@ -88,6 +88,24 @@ pub struct DeviceConfig {
     /// a different SHA-256 downloads and installs this one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_update: Option<AppRelease>,
+    /// Present when this projector plays in sync with its group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync: Option<SyncConfig>,
+}
+
+/// Sync group settings for one projector. Projectors in a sync group play
+/// every clip against the same anchor time on the server clock, so their
+/// positions line up; each one corrects drift by adjusting playback speed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SyncConfig {
+    pub group_id: String,
+    /// Only one projector in a group plays sound.
+    #[serde(default)]
+    pub muted: bool,
+    /// Shifts this projector's timeline: positive plays ahead, to make up for
+    /// slower display latency.
+    #[serde(default)]
+    pub trim_ms: i64,
 }
 
 /// An Android player APK served by the server.
@@ -179,6 +197,9 @@ pub struct DeviceReport {
     /// SHA-256 of the running app package, to tell whether an update applied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_sha256: Option<String>,
+    /// Average distance from the sync group's timeline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_error_ms: Option<i64>,
     #[serde(default)]
     pub errors: Vec<String>,
 }

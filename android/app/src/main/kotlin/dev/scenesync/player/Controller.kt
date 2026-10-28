@@ -73,6 +73,9 @@ class Controller(private val context: Context) {
     val nowPlaying = MutableStateFlow<Desired>(Desired.Idle())
 
     @Volatile private var lastError: String? = null
+
+    /** Average distance from the sync group's timeline, set by the activity. */
+    @Volatile var syncErrorMs: Long? = null
     private val manualServerUrl = Channel<String>(Channel.CONFLATED)
     private var started = false
 
@@ -359,6 +362,7 @@ class Controller(private val context: Context) {
             clockOffsetMs = clock.wallOffsetMs(),
             appVersion = appVersion,
             appSha256 = runCatching { updater.ownSha256 }.getOrNull(),
+            syncErrorMs = syncErrorMs,
             errors = listOfNotNull(lastError),
         )
         val body = SceneSyncJson.encodeToString(DeviceReport.serializer(), report).toRequestBody(JSON)

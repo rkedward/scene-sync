@@ -295,6 +295,7 @@ function renderDevices() {
         <dt>Config</dt><dd>${sync}</dd>
         <dt>Storage</dt><dd>${space}</dd>
         <dt>Clips</dt><dd>${d.media.map(esc).join(", ") || "none"}</dd>
+        ${syncRow(d, r)}
         <dt>Fit</dt><dd>${d.calibrate ? '<span class="warn">showing pattern</span>' : d.mapping ? "fitted to window" : "full frame"}</dd>
         <dt>Model</dt><dd>${esc(d.model || "–")} · app ${esc(d.app_version || "–")}${appStatus(r)}</dd>
         ${errors}
@@ -695,6 +696,20 @@ function appStatus(r) {
   return r.app_sha256 === state.app.sha256 ? ' <span class="ok">(latest)</span>' : ' <span class="warn">(update pending)</span>';
 }
 
+function syncRow(d, r) {
+  const g = state.groups.find((x) => x.id === d.group_id);
+  if (!g || !g.sync) return "";
+  const err = r.sync_error_ms;
+  const quality = err == null ? '<span class="muted">measuring…</span>'
+    : `<span class="${err <= 50 ? "ok" : err <= 150 ? "warn" : "bad"}">within about ${err} ms</span>`;
+  const sound = (g.audio_device_id || g.devices[0]) === d.id ? "sound on" : "muted";
+  return `<dt>Sync</dt><dd>${esc(g.name)}: ${quality}, ${sound}
+    <div class="row" style="margin-top:4px"><label class="muted">Trim</label>
+    <input type="number" data-trim value="${d.trim_ms || 0}" step="10" style="width:80px; padding:4px 6px; border:1px solid var(--line); border-radius:6px; background:var(--bg)"> ms
+    <button data-trim-save>Set</button></div>
+    <div class="hint">If this projector looks late next to the others, raise the trim.</div></dd>`;
+}
+
 function bulkControls() {
   const options = state.media.map((m) => `<option value="${esc(m.id)}">${esc(m.id)}</option>`).join("");
   return `<select data-bclip>${options}</select>
@@ -719,6 +734,11 @@ function renderGroups() {
       <h3>${esc(g.name)}</h3>
       <dl class="kv"><dt>Projectors</dt><dd>${g.devices.map((id) => esc(names[id] || id)).join(", ") || '<span class="muted">none yet; pick this group on a projector card</span>'}</dd></dl>
       <div class="row"><label class="muted">Schedule</label><select data-group-schedule>${schedOptions(g.schedule_id)}</select></div>
+      <div class="row">
+        <label><input type="checkbox" data-group-sync ${g.sync ? "checked" : ""}> Play in sync</label>
+        ${g.sync ? `<label class="muted">Sound from</label><select data-group-audio>${g.devices.map((id) =>
+          `<option value="${esc(id)}" ${id === (g.audio_device_id || g.devices[0]) ? "selected" : ""}>${esc(names[id] || id)}</option>`).join("")}</select>` : ""}
+      </div>
       <div class="bulk row" data-target="${esc(g.id)}">${bulkControls()}</div>
       <div class="row"><button data-group-rename>Rename</button><button class="danger" data-group-delete>Delete</button></div>
     </div>`).join("") || '<p class="muted">No groups yet.</p>';
@@ -744,13 +764,16 @@ document.addEventListener("click", async (e) => {
     if (!clip) return toast("Upload a clip first.");
     action = { type: "play", media_id: clip, loop: cmd === "loop" };
   } else if (cmd === "stop") action = { type: "stop" };
-  let device_ids = null;
+  let device_ids = null, start_in_ms = null;
   if (target !== "all") {
-    device_ids = state.groups.find((g) => g.id === target)?.devices || [];
+    const g = state.groups.find((g) => g.id === target);
+    device_ids = g?.devices || [];
     if (!device_ids.length) return toast("This group has no projectors yet.");
+    // Give every projector time to get the command before the shared start.
+    if (g.sync && action) start_in_ms = 1500;
   }
   try {
-    const r = await api("POST", "/api/v1/admin/command", { device_ids, action, hold });
+    const r = await api("POST", "/api/v1/admin/command", { device_ids, action, hold, start_in_ms });
     toast(`Sent to ${r.devices} projector${r.devices === 1 ? "" : "s"}.`);
     refresh();
   } catch (err) { toast(err.message); }
@@ -782,6 +805,16 @@ $("groups").addEventListener("click", async (e) => {
 });
 
 $("groups").addEventListener("change", async (e) => {
+  const card = e.target.closest("[data-group-id]");
+  if (card && (e.target.dataset.groupSync !== undefined || e.target.dataset.groupAudio !== undefined)) {
+    const sync = card.querySelector("[data-group-sync]").checked;
+    const audio = card.querySelector("[data-group-audio]")?.value || null;
+    try {
+      await api("PUT", `/api/v1/admin/groups/${encodeURIComponent(card.dataset.groupId)}/sync`, { sync, audio_device_id: sync ? audio : null });
+      e.target.blur(); refresh();
+    } catch (err) { toast(err.message); }
+    return;
+  }
   if (e.target.dataset.groupSchedule === undefined) return;
   const id = e.target.closest("[data-group-id]").dataset.groupId;
   try {
@@ -834,7 +867,7 @@ async function refresh() {
     if (!$("fit").hidden) renderFitPattern();
     // Don't redraw the cards while a dropdown on them is open.
     const focused = document.activeElement;
-    if (focused && focused.tagName === "SELECT" && $("devices").contains(focused)) return;
+    if (focused && (focused.tagName === "SELECT" || focused.tagName === "INPUT") && $("devices").contains(focused)) return;
     renderDevices();
     document.querySelectorAll(".device").forEach((el) => {
       const sel = el.querySelector("[data-clip]");
@@ -867,6 +900,10 @@ $("devices").addEventListener("click", async (e) => {
         action = { type: "play", media_id: clip, loop: cmd === "loop" };
       } else if (cmd === "stop") action = { type: "stop" };
       await api("POST", `/api/v1/admin/devices/${encodeURIComponent(id)}/command`, { action, hold });
+    } else if (e.target.dataset.trimSave !== undefined) {
+      const trim_ms = parseInt(card.querySelector("[data-trim]").value || "0", 10);
+      await api("PUT", `/api/v1/admin/devices/${encodeURIComponent(id)}/trim`, { trim_ms });
+      toast(`Trim set to ${trim_ms} ms.`);
     } else if (e.target.dataset.fit !== undefined) {
       openFit(id); return;
     } else if (e.target.dataset.rename !== undefined) {

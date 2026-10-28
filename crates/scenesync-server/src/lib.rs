@@ -175,6 +175,8 @@ pub fn app(state: AppState) -> Router {
             "/api/v1/admin/groups/{id}/schedule",
             put(groups::set_schedule),
         )
+        .route("/api/v1/admin/groups/{id}/sync", put(groups::set_sync))
+        .route("/api/v1/admin/devices/{id}/trim", put(groups::set_trim))
         .route("/api/v1/admin/command", post(admin_bulk_command))
         .route(
             "/api/v1/admin/app",
@@ -446,6 +448,7 @@ fn build_config(state: &AppState, d: &Device) -> ApiResult<DeviceConfig> {
         mapping: d.mapping.clone(),
         calibrate: d.calibrate,
         app_update: app_update::release_for_config(state),
+        sync: groups::sync_config(state, d)?,
     })
 }
 
@@ -793,6 +796,10 @@ async fn admin_command(
 struct BulkCommandRequest {
     /// Devices to command; `null` means every paired projector.
     device_ids: Option<Vec<String>>,
+    /// Start this far in the future, so every projector has the config (and
+    /// the clip) before the shared start moment. Up to 10 s.
+    #[serde(default)]
+    start_in_ms: Option<u64>,
     #[serde(flatten)]
     command: CommandRequest,
 }
@@ -823,7 +830,10 @@ async fn admin_bulk_command(
         }
         None => state.db.devices()?.into_iter().map(|d| d.id).collect(),
     };
-    let ov = req.command.to_override(&state)?;
+    let mut ov = req.command.to_override(&state)?;
+    if let (Some(o), Some(ms)) = (ov.as_mut(), req.start_in_ms) {
+        o.issued_at += chrono::Duration::milliseconds(ms.min(10_000) as i64);
+    }
     for id in &ids {
         apply_override(&state, id, ov.as_ref())?;
     }

@@ -21,6 +21,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
@@ -29,6 +30,7 @@ import dev.scenesync.engine.Desired
 import dev.scenesync.engine.Mapping
 import dev.scenesync.engine.PlaybackKey
 import dev.scenesync.engine.ResumePolicy
+import dev.scenesync.engine.SyncMath
 import dev.scenesync.engine.evaluate
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -51,6 +53,12 @@ class MainActivity : ComponentActivity() {
     /** What is on screen; null forces the next tick to switch (e.g. after calibration). */
     private var shown: Desired? = null
     private var appliedMapping: Mapping? = null
+
+    // Sync groups: how far ahead to seek to cover the seek itself (learned),
+    // and a running average of the error for reports.
+    private var seekLeadMs = 150L
+    private var lastSeekAt = 0L
+    private var avgErrorMs = 0.0
     private var current: PlaybackKey? = null
     private var overlayUntil = 0L
     private val backPresses = ArrayDeque<Long>()
@@ -153,8 +161,14 @@ class MainActivity : ComponentActivity() {
         val now = controller.clock.now()
         val durations = cfg?.media?.mapNotNull { m -> m.durationMs?.let { m.mediaId to it } }?.toMap() ?: emptyMap()
         val desired = evaluate(cfg?.schedule, cfg?.override, durations, now, current)
-        if (desired == shown) return
-        show(desired, now, durations)
+        val volume = if (cfg?.sync?.muted == true) 0f else 1f
+        if (player.volume != volume) player.volume = volume
+        if (desired == shown) {
+            if (desired is Desired.Play && cfg?.sync != null) keepInSync(desired, cfg.sync!!.trimMs, durations)
+            return
+        }
+        if (cfg?.sync == null) controller.syncErrorMs = null
+        show(desired, now, durations, cfg?.sync?.trimMs)
         shown = desired
         current = desired.key
         controller.nowPlaying.value = desired
@@ -190,7 +204,41 @@ class MainActivity : ComponentActivity() {
         return floatArrayOf(x, y, x + bw, y, x + bw, y + bh, x, y + bh)
     }
 
-    private fun show(desired: Desired, now: java.time.Instant, durations: Map<String, Long>) {
+    /**
+     * In a sync group every projector plays against the same anchor on the
+     * server clock. Compare where the clip is with where it should be, then
+     * nudge the speed or seek.
+     */
+    private fun keepInSync(d: Desired.Play, trimMs: Long, durations: Map<String, Long>) {
+        if (player.playbackState != Player.STATE_READY || !player.isPlaying) return
+        val duration = durations[d.mediaId] ?: player.duration.takeIf { it > 0 }
+        val expected = SyncMath.expectedPositionMs(
+            d.anchor.toEpochMilli(), controller.clock.now().toEpochMilli(), duration, d.looping, trimMs,
+        ) ?: return
+        val error = SyncMath.errorMs(player.currentPosition, expected, duration, d.looping)
+        val sinceSeek = SystemClock.elapsedRealtime() - lastSeekAt
+        if (sinceSeek in 1..3_000) {
+            // Right after a seek, the remaining error says how far off the lead was.
+            if (sinceSeek > 500) {
+                seekLeadMs = (seekLeadMs - error / 2).coerceIn(0L, 1_500L)
+                lastSeekAt = 0L
+            }
+            return
+        }
+        avgErrorMs = avgErrorMs * 0.9 + kotlin.math.abs(error) * 0.1
+        controller.syncErrorMs = avgErrorMs.toLong()
+        when (val c = SyncMath.correction(error, expected, seekLeadMs, duration, d.looping)) {
+            is SyncMath.Correction.Speed ->
+                if (player.playbackParameters.speed != c.speed) player.playbackParameters = PlaybackParameters(c.speed)
+            is SyncMath.Correction.Seek -> {
+                player.playbackParameters = PlaybackParameters(1f)
+                player.seekTo(c.toMs)
+                lastSeekAt = SystemClock.elapsedRealtime()
+            }
+        }
+    }
+
+    private fun show(desired: Desired, now: java.time.Instant, durations: Map<String, Long>, syncTrimMs: Long? = null) {
         when (desired) {
             is Desired.Idle -> showBlack()
             is Desired.Play -> {
@@ -203,11 +251,16 @@ class MainActivity : ComponentActivity() {
                 val sinceStart = Duration.between(desired.anchor, now).toMillis().coerceAtLeast(0)
                 val duration = durations[desired.mediaId]
                 val startMs = when {
+                    // In a sync group, loops always follow the shared timeline.
+                    syncTrimMs != null -> (SyncMath.expectedPositionMs(
+                        desired.anchor.toEpochMilli(), now.toEpochMilli(), duration, desired.looping, syncTrimMs,
+                    ) ?: 0L) + seekLeadMs
                     !desired.looping -> sinceStart
                     desired.resume == ResumePolicy.CONTINUE && duration != null && duration > 0 -> sinceStart % duration
                     else -> 0L
                 }
                 videoView.visibility = View.INVISIBLE
+                player.playbackParameters = PlaybackParameters(1f)
                 player.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)), startMs)
                 player.repeatMode = if (desired.looping) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
                 player.prepare()
