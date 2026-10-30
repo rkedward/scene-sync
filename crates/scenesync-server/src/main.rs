@@ -17,6 +17,8 @@ Environment:
   SCENESYNC_LISTEN          address to listen on (default 0.0.0.0:8080)
   SCENESYNC_ADMIN_PASSWORD  dashboard password (default: generated, saved in the data folder)
   SCENESYNC_NO_MDNS         set to skip advertising on the local network
+  SCENESYNC_NO_UPDATE_CHECK set to never contact GitHub for updates
+  SCENESYNC_UPDATE_URL      release API to check (default: the GitHub repo)
   RUST_LOG                  log detail, e.g. debug";
 
 #[tokio::main]
@@ -68,6 +70,9 @@ async fn main() -> Result<()> {
     }
 
     scenesync_server::backup::spawn_daily(state.clone());
+    if std::env::var("SCENESYNC_NO_UPDATE_CHECK").is_err() {
+        scenesync_server::updates::spawn_daily(state.clone());
+    }
 
     let listener = tokio::net::TcpListener::bind(listen).await?;
     tracing::info!(

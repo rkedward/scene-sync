@@ -59,7 +59,7 @@ jobs:
           dir=scenesync-${{ matrix.name }}
           mkdir -p "$dir"
           cp target/${{ matrix.target }}/release/scenesync-server target/${{ matrix.target }}/release/scenesync-sim "$dir/"
-          cp deploy/scenesync.service deploy/install.sh README.md docs/operations.md "$dir/"
+          cp deploy/scenesync.service deploy/scenesync-update.service deploy/scenesync-update.path deploy/install.sh README.md docs/operations.md "$dir/"
           tar czf "$dir.tar.gz" "$dir"
           file "$dir/scenesync-server"
       - uses: actions/upload-artifact@v4

@@ -24,6 +24,9 @@ pub(crate) struct ReleaseInfo {
     pub size: u64,
     pub filename: String,
     pub uploaded_at: DateTime<Utc>,
+    /// The GitHub release it came from (e.g. "v0.5.1"); None for an upload.
+    #[serde(default)]
+    pub tag: Option<String>,
 }
 
 fn dir(state: &AppState) -> std::path::PathBuf {
@@ -104,22 +107,33 @@ pub(crate) async fn upload(
             let _ = tokio::fs::remove_file(&tmp).await;
             return Err(ApiError::bad_request(format!("{filename} is not an APK")));
         }
-        tokio::fs::rename(&tmp, dir(&state).join("player.apk")).await?;
         let info = ReleaseInfo {
             sha256: hex::encode(hasher.finalize()),
             size,
             filename,
             uploaded_at: Utc::now(),
+            tag: None,
         };
-        tokio::fs::write(
-            dir(&state).join("release.json"),
-            serde_json::to_vec_pretty(&info).map_err(anyhow::Error::from)?,
-        )
-        .await?;
-        notify_all(&state)?;
-        return Ok(Json(info));
+        return Ok(Json(offer(&state, &tmp, info).await?));
     }
     Err(ApiError::bad_request("no file in upload"))
+}
+
+/// Makes the APK at `file` (already checked) the one every projector runs.
+pub(crate) async fn offer(
+    state: &AppState,
+    file: &std::path::Path,
+    info: ReleaseInfo,
+) -> ApiResult<ReleaseInfo> {
+    tokio::fs::create_dir_all(dir(state)).await?;
+    tokio::fs::rename(file, dir(state).join("player.apk")).await?;
+    tokio::fs::write(
+        dir(state).join("release.json"),
+        serde_json::to_vec_pretty(&info).map_err(anyhow::Error::from)?,
+    )
+    .await?;
+    notify_all(state)?;
+    Ok(info)
 }
 
 pub(crate) async fn remove(_: Admin, State(state): State<AppState>) -> ApiResult<StatusCode> {

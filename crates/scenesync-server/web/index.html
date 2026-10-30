@@ -183,6 +183,18 @@
       </table>
     </div>
   </section>
+  <section id="updates-section">
+    <h2>Updates</h2>
+    <p class="muted">The Pi checks GitHub for new SceneSync releases. Projectors get the player app from the Pi, all at once.</p>
+    <div id="updates-info" class="muted">Checking…</div>
+    <div class="row" style="margin-top:8px">
+      <button id="upd-check">Check now</button>
+      <button class="primary" id="upd-player" hidden></button>
+      <button class="primary" id="upd-server" hidden></button>
+    </div>
+    <label class="row" style="margin-top:8px"><input type="checkbox" id="upd-auto"> Install updates automatically every night at 4:00</label>
+    <p class="hint">Automatic updates leave a hand-uploaded player app in place until you click "Get … from GitHub".</p>
+  </section>
   <section id="app-section">
     <h2>Player app</h2>
     <p class="muted">Upload a SceneSync Player APK and every projector installs it. The first time, the projector may ask you to press Install with the remote; after that, updates install on their own.</p>
@@ -747,6 +759,50 @@ function renderGroups() {
   });
 }
 
+function renderUpdates() {
+  const u = state.updates; if (!u) return;
+  const latest = u.latest;
+  const lines = [];
+  lines.push(latest
+    ? `Latest release: <a href="${esc(latest.url)}" target="_blank" rel="noopener"><b>${esc(latest.tag)}</b></a>`
+    : "Latest release: unknown");
+  let server = `Server: <b>v${esc(u.server.version)}</b>`;
+  if (u.server.updating) server += " (updating now; the dashboard comes back in about a minute)";
+  else if (u.server.update_available && !u.server.can_update) server += " (update available; run the install command on the Pi to update)";
+  else if (u.server.update_available) server += " (update available)";
+  else if (latest) server += " (up to date)";
+  lines.push(server);
+  let player = "Player app: ";
+  if (!u.player.offered) player += "nothing offered yet";
+  else if (u.player.tag) player += `<b>${esc(u.player.tag)}</b> from GitHub${u.player.update_available ? " (update available)" : " (up to date)"}`;
+  else player += "a hand-uploaded build";
+  lines.push(player);
+  if (u.checked_at) lines.push(`<span class="hint">Checked ${esc(new Date(u.checked_at).toLocaleString())}</span>`);
+  if (u.error) lines.push(`<span class="warn">${esc(u.error)}</span>`);
+  $("updates-info").innerHTML = lines.join("<br>");
+  const pb = $("upd-player");
+  pb.hidden = !(latest && latest.apk_url && (u.player.update_available || !u.player.tag));
+  pb.textContent = latest ? `Get player ${latest.tag} from GitHub` : "";
+  const sb = $("upd-server");
+  sb.hidden = !(u.server.update_available && u.server.can_update && !u.server.updating);
+  sb.textContent = latest ? `Update server to ${latest.tag}` : "";
+  if (document.activeElement !== $("upd-auto")) $("upd-auto").checked = u.auto;
+}
+
+async function updatesAction(button, method, path, body, done) {
+  button.disabled = true;
+  try { state.updates = await api(method, path, body); renderUpdates(); if (done) toast(done); }
+  catch (err) { toast(err.message); }
+  finally { button.disabled = false; }
+}
+$("upd-check").addEventListener("click", (e) => updatesAction(e.target, "POST", "/api/v1/admin/updates/check"));
+$("upd-player").addEventListener("click", (e) => updatesAction(e.target, "POST", "/api/v1/admin/updates/player", undefined, "Downloaded. Projectors will update.").then(refresh));
+$("upd-server").addEventListener("click", (e) => {
+  if (!confirm("Update the server now? It restarts, so the dashboard is gone for about a minute. Projectors keep playing.")) return;
+  updatesAction(e.target, "POST", "/api/v1/admin/updates/server", undefined, "Updating. Reload this page in a minute.");
+});
+$("upd-auto").addEventListener("change", (e) => updatesAction(e.target, "PUT", "/api/v1/admin/updates", { auto: e.target.checked }));
+
 function renderApp() {
   const a = state.app;
   $("app-info").innerHTML = a
@@ -857,6 +913,7 @@ async function refresh() {
       api("GET", "/api/v1/admin/devices"), api("GET", "/api/v1/admin/media"), api("GET", "/api/v1/admin/pairings"),
       api("GET", "/api/v1/admin/schedules"), api("GET", "/api/v1/admin/groups"), api("GET", "/api/v1/admin/app"),
     ]);
+    api("GET", "/api/v1/admin/updates").then((u) => { state.updates = u; renderUpdates(); }).catch(() => {});
     // Keep the user's clip selection while re-rendering.
     const picked = {};
     document.querySelectorAll(".device").forEach((el) => (picked[el.dataset.id] = el.querySelector("[data-clip]")?.value));

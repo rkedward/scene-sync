@@ -1,0 +1,11 @@
+# Installs the latest SceneSync release. Started by scenesync-update.path when
+# the dashboard (or the 04:00 automatic check) asks for a server update.
+# Logs: journalctl -u scenesync-update
+[Unit]
+Description=Update SceneSync from GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/scenesync-update --update

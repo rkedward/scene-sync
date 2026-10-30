@@ -55,16 +55,18 @@ The server advertises itself on the network as `_scenesync._tcp`, so players usu
 
 Download `scenesync-player.apk` from the [latest release](https://github.com/rkedward/scene-sync/releases/latest). Each CI run also builds one (see the **Actions** tab, artifact `scenesync-player-debug-apk`). To build it yourself: install Android Studio or the Android SDK, then run `./gradlew :app:assembleDebug` in `android/`.
 
-Install with `adb` over the network (enable developer options and network debugging on the projector first):
+The simplest install is from a USB stick: copy the APK onto it, open it in the projector's file manager, and allow "install unknown apps" when asked. Through a USB hub you can keep a mouse plugged in at the same time. If the projector allows network debugging, `adb` works too:
 
 ```sh
 adb connect <projector-ip>:5555
-adb install -r scenesync-player-debug.apk
+adb install -r scenesync-player.apk
 ```
 
-Then open **SceneSync Player**. It looks for the server, shows a 6-digit code, and waits for you to enter it in the dashboard.
+Then open **SceneSync Player**. It looks for the server, shows a 6-digit code, and waits for you to enter it in the dashboard. After pairing it opens the **Display over other apps** setting once; turn it on for SceneSync.
 
-For a permanent setup, make SceneSync Player the projector's **home app** (Android asks which home app to use when you press the Home button). That is the most reliable way for it to come back after a reboot or power cut on Android 14. While it is the home app, press **Back three times quickly** to open system settings. Any other remote key shows the status overlay for 10 seconds.
+**Leaving and coming back.** Press **Back** (or right-click the mouse) to leave the player. The video stops, but SceneSync keeps running in the background, connected to the Pi. When something new should play (a schedule starts, you press a command in the dashboard, or you turn on calibration), it reopens the player by itself. That needs **Display over other apps** turned on; without it, open the app from its icon. It reopens only when the wanted content changes, so it won't keep popping up while you use the projector.
+
+For a permanent setup, make SceneSync Player the projector's **home app** (Android asks which home app to use when you press the Home button). That is the most reliable way for it to come back after a reboot or power cut on Android 14. While it is the home app, Back can't leave it; press **Back three times quickly** to open system settings instead. Any other remote key shows the status overlay for 10 seconds.
 
 ## Groups and app updates
 
@@ -72,7 +74,7 @@ Under **Groups**, add a group (for example "Garage doors"), then pick it on each
 
 Tick **Play in sync** on a group to keep its projectors on the same frame, and pick which one plays sound. Each card then shows how close it is (for example "within about 20 ms"). If one projector still looks behind the others, raise its **Trim** a little (tens of milliseconds).
 
-To update the player app, upload the APK under **Player app**. Each projector downloads it and installs it. The first update after installing with `adb` shows an Android "Install" prompt; press it with the remote. Later updates install on their own. For no prompts at all, make the app device owner once, on a projector with no Google account:
+Updates come from GitHub through the Pi: the **Updates** section can fetch the latest player app for every projector and update the server, and by default does both every night at 4:00 (see [docs/operations.md](docs/operations.md#updates)). To try your own build, upload the APK under **Player app**. Each projector downloads it and installs it. The first update after installing with `adb` shows an Android "Install" prompt; press it with the remote. Later updates install on their own. For no prompts at all, make the app device owner once, on a projector with no Google account:
 
 ```sh
 adb shell dpm set-device-owner dev.scenesync.player/.AdminReceiver

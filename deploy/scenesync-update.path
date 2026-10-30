@@ -1,0 +1,10 @@
+# Watches for the note the SceneSync server leaves when it wants an update.
+[Unit]
+Description=Watch for SceneSync update requests
+
+[Path]
+PathExists=/var/lib/scenesync/update-requested
+Unit=scenesync-update.service
+
+[Install]
+WantedBy=multi-user.target
