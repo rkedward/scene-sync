@@ -29,6 +29,11 @@ class Prefs(context: Context) {
 
     fun clearPairingCode() = sp.edit().remove("pairing_code").apply()
 
+    /** Whether we already opened the "Display over other apps" setting once. */
+    var askedOverlay: Boolean
+        get() = sp.getBoolean("asked_overlay", false)
+        set(v) = sp.edit().putBoolean("asked_overlay", v).apply()
+
     /** Last known server_time - wall_clock, used after a reboot before reaching the server. */
     var wallOffsetMs: Long
         get() = sp.getLong("wall_offset_ms", 0L)

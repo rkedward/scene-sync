@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- App icon: a glowing orange window with a play button. Kept inside the
+     66dp safe zone so launchers can crop it to any shape. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Window glow -->
+    <path android:fillColor="#40F97316"
+        android:pathData="M34,33h40a5,5 0,0 1,5 5v32a5,5 0,0 1,-5 5h-40a5,5 0,0 1,-5 -5v-32a5,5 0,0 1,5 -5z" />
+    <!-- Window frame -->
+    <path android:strokeColor="#FFF97316" android:strokeWidth="5" android:fillColor="#00000000"
+        android:pathData="M34,33h40a5,5 0,0 1,5 5v32a5,5 0,0 1,-5 5h-40a5,5 0,0 1,-5 -5v-32a5,5 0,0 1,5 -5z" />
+    <!-- Play button -->
+    <path android:fillColor="#FFFDBA74" android:pathData="M47,43L47,65L65,54Z" />
+</vector>

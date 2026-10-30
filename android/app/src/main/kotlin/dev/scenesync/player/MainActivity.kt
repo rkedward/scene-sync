@@ -1,6 +1,7 @@
 package dev.scenesync.player
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Matrix
 import android.net.Uri
 import android.os.Bundle
@@ -41,6 +42,12 @@ import java.time.Duration
  * on screen and switches only when the answer changes.
  */
 class MainActivity : ComponentActivity() {
+    companion object {
+        /** True while the player is on screen; read by [PlayerService]. */
+        @Volatile var inFront = false
+            private set
+    }
+
     private lateinit var controller: Controller
     private lateinit var player: ExoPlayer
     private lateinit var videoView: TextureView
@@ -66,6 +73,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         controller = (application as SceneSyncApp).controller
+        PlayerService.start(this)
         setContentView(R.layout.activity_main)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemBars()
@@ -108,7 +116,12 @@ class MainActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                launch { controller.status.collect { renderStatus() } }
+                launch {
+                    controller.status.collect {
+                        renderStatus()
+                        if (it.phase == Controller.Phase.CONNECTED) askToComeBackOnItsOwn()
+                    }
+                }
                 launch {
                     while (true) {
                         tick()
@@ -125,9 +138,46 @@ class MainActivity : ComponentActivity() {
         if (hasFocus) hideSystemBars()
     }
 
+    override fun onStart() {
+        super.onStart()
+        inFront = true
+    }
+
+    override fun onStop() {
+        // Left the player (Back, Home or another app): stop the video and its
+        // sound. The background service stays connected to the Pi.
+        inFront = false
+        showBlack()
+        shown = null
+        current = null
+        calibrationView.visibility = View.GONE
+        controller.nowPlaying.value = Desired.Idle("player closed")
+        super.onStop()
+    }
+
     override fun onDestroy() {
         player.release()
         super.onDestroy()
+    }
+
+    /**
+     * Once, after pairing: open the "Display over other apps" setting. With it
+     * on, the background service can bring the player back when a schedule
+     * starts or a command arrives.
+     */
+    private fun askToComeBackOnItsOwn() {
+        val prefs = Prefs(this)
+        if (prefs.askedOverlay || PlayerService.canComeBack(this)) return
+        prefs.askedOverlay = true
+        val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+        runCatching { startActivity(intent) }
+            .onFailure { controller.reportError("No 'Display over other apps' setting on this projector") }
+    }
+
+    private fun isHomeApp(): Boolean {
+        val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        return packageManager.resolveActivity(home, PackageManager.MATCH_DEFAULT_ONLY)
+            ?.activityInfo?.packageName == packageName
     }
 
     private fun hideSystemBars() {
@@ -290,7 +340,12 @@ class MainActivity : ComponentActivity() {
             is Desired.Idle -> "Showing: black"
             is Desired.Play -> "Showing: ${d.mediaId}${if (d.looping) " (loop)" else ""}"
         }
-        statusView.text = if (setupNeeded) s.message else "${s.message}\n$nowText"
+        val tip = if (!setupNeeded && !PlayerService.canComeBack(this)) {
+            "\nTip: turn on \"Display over other apps\" for SceneSync so it can reopen itself."
+        } else {
+            ""
+        }
+        statusView.text = if (setupNeeded) s.message else "${s.message}\n$nowText$tip"
         val wantInput = s.phase == Controller.Phase.NEED_SERVER_URL
         if (wantInput && serverInput.visibility != View.VISIBLE) {
             serverInput.visibility = View.VISIBLE
@@ -302,7 +357,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
-            // This may be the home app, so BACK must not exit. Press it three
+            // Back (or a right-click) leaves the player. The service keeps
+            // running and brings it back when something new should play.
+            if (!isHomeApp()) {
+                moveTaskToBack(true)
+                return true
+            }
+            // As the home app there is nothing to go back to. Press Back three
             // times within two seconds to open system settings.
             val t = SystemClock.elapsedRealtime()
             backPresses.addLast(t)
