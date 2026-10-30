@@ -74,7 +74,7 @@ Under **Groups**, add a group (for example "Garage doors"), then pick it on each
 
 Tick **Play in sync** on a group to keep its projectors on the same frame, and pick which one plays sound. Each card then shows how close it is (for example "within about 20 ms"). If one projector still looks behind the others, raise its **Trim** a little (tens of milliseconds).
 
-To update the player app, upload the APK under **Player app**. Each projector downloads it and installs it. The first update after installing with `adb` shows an Android "Install" prompt; press it with the remote. Later updates install on their own. For no prompts at all, make the app device owner once, on a projector with no Google account:
+Updates come from GitHub through the Pi: the **Updates** section can fetch the latest player app for every projector and update the server, and by default does both every night at 4:00 (see [docs/operations.md](docs/operations.md#updates)). To try your own build, upload the APK under **Player app**. Each projector downloads it and installs it. The first update after installing with `adb` shows an Android "Install" prompt; press it with the remote. Later updates install on their own. For no prompts at all, make the app device owner once, on a projector with no Google account:
 
 ```sh
 adb shell dpm set-device-owner dev.scenesync.player/.AdminReceiver

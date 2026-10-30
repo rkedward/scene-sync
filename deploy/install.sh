@@ -7,6 +7,9 @@
 # or, from an unpacked release folder:  sudo ./install.sh
 #
 # Safe to run again to update: settings, clips and the password are kept.
+# It also installs /usr/local/bin/scenesync-update (this script), which the
+# dashboard uses to update the server: `scenesync-update --update` always
+# downloads the latest release and runs that release's installer.
 set -eu
 
 REPO="rkedward/scene-sync"
@@ -24,7 +27,10 @@ case "$(uname -m)" in
 esac
 
 here=$(dirname "$0")
-if [ -x "$here/scenesync-server" ]; then
+if [ "${1:-}" = "--update" ]; then
+    rm -f "$DATA/update-requested"
+fi
+if [ "${1:-}" != "--update" ] && [ -x "$here/scenesync-server" ]; then
     src="$here"
 else
     tmp=$(mktemp -d)
@@ -32,6 +38,11 @@ else
     echo "Downloading the latest SceneSync for $name…"
     curl -fsSL "https://github.com/$REPO/releases/latest/download/scenesync-$name.tar.gz" | tar xz -C "$tmp"
     src="$tmp/scenesync-$name"
+    # Let the new release's own installer finish the job.
+    if [ -f "$src/install.sh" ]; then
+        sh "$src/install.sh"
+        exit $?
+    fi
 fi
 
 if systemctl is-active --quiet scenesync 2>/dev/null; then
@@ -43,6 +54,13 @@ id scenesync >/dev/null 2>&1 || useradd --system --home "$DATA" --create-home --
 mkdir -p "$DATA"
 chown scenesync:scenesync "$DATA"
 install -m 644 "$src/scenesync.service" /etc/systemd/system/scenesync.service
+# Updates from the dashboard.
+install -m 755 "$src/install.sh" /usr/local/bin/scenesync-update
+for unit in scenesync-update.service scenesync-update.path; do
+    if [ -f "$src/$unit" ]; then
+        install -m 644 "$src/$unit" "/etc/systemd/system/$unit"
+    fi
+done
 
 if ! command -v ffprobe >/dev/null 2>&1; then
     echo "Installing ffmpeg (for clip length and resolution)…"
@@ -53,6 +71,9 @@ fi
 
 systemctl daemon-reload
 systemctl enable --now scenesync
+if [ -f /etc/systemd/system/scenesync-update.path ]; then
+    systemctl enable --now scenesync-update.path
+fi
 sleep 2
 
 ip=$(hostname -I 2>/dev/null | awk '{print $1}')

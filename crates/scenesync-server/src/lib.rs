@@ -8,6 +8,7 @@ mod groups;
 pub mod mdns;
 mod media;
 mod schedules;
+pub mod updates;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -51,6 +52,10 @@ const DASHBOARD_HTML: &str = include_str!("../web/index.html");
 pub struct Config {
     pub data_dir: PathBuf,
     pub admin_password: String,
+    /// GitHub's "latest release" API (SCENESYNC_UPDATE_URL to change).
+    pub update_url: String,
+    /// Exists when the root updater is installed (deploy/scenesync-update.path).
+    pub updater_unit: PathBuf,
 }
 
 impl Config {
@@ -80,6 +85,9 @@ impl Config {
         Ok(Config {
             data_dir: data_dir.to_path_buf(),
             admin_password,
+            update_url: std::env::var("SCENESYNC_UPDATE_URL")
+                .unwrap_or_else(|_| updates::DEFAULT_URL.into()),
+            updater_unit: PathBuf::from("/etc/systemd/system/scenesync-update.path"),
         })
     }
 }
@@ -180,6 +188,13 @@ pub fn app(state: AppState) -> Router {
         .route("/api/v1/admin/devices/{id}/trim", put(groups::set_trim))
         .route("/api/v1/admin/command", post(admin_bulk_command))
         .route("/api/v1/admin/backup", get(backup::download))
+        .route(
+            "/api/v1/admin/updates",
+            get(updates::get_status).put(updates::set_settings),
+        )
+        .route("/api/v1/admin/updates/check", post(updates::check_now))
+        .route("/api/v1/admin/updates/player", post(updates::update_player))
+        .route("/api/v1/admin/updates/server", post(updates::update_server))
         .route(
             "/api/v1/admin/app",
             get(app_update::info)

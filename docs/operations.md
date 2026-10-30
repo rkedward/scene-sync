@@ -10,7 +10,7 @@ curl -fsSL https://github.com/rkedward/scene-sync/releases/latest/download/insta
 
 The script downloads the latest release, installs `scenesync-server` and `scenesync-sim` to `/usr/local/bin`, creates a `scenesync` user with data in `/var/lib/scenesync`, installs ffmpeg (for clip lengths) and starts the service. It prints the dashboard address and password.
 
-Run the same command to update. Settings, clips and the password are kept.
+Run the same command to update. Settings, clips and the password are kept. Once installed, you can also update from the dashboard (see **Updates** below).
 
 Without Internet on the Pi, download `scenesync-linux-arm64.tar.gz` from the [releases page](https://github.com/rkedward/scene-sync/releases) on another computer, copy it over, then:
 
@@ -20,9 +20,23 @@ tar xzf scenesync-linux-arm64.tar.gz && cd scenesync-linux-arm64 && sudo ./insta
 
 ## Install the player on a projector
 
-Download `scenesync-player.apk` from the same release. The first time, install it with `adb` (see the README). After that, upload new versions under **Player app** in the dashboard and every projector updates itself.
+Download `scenesync-player.apk` from the same release. The first time, install it from a USB stick or with `adb` (see the README). After that, every projector updates itself from the Pi.
 
 You can also open `http://<pi-address>:8080/api/v1/app/player.apk` in a projector's browser once an APK has been uploaded.
+
+## Updates
+
+The dashboard's **Updates** section shows the latest release on GitHub, the server's version and which player app the projectors are offered.
+
+- **Get player … from GitHub** downloads that release's APK onto the Pi. Every projector installs it.
+- **Update server to …** installs the new server. The dashboard is gone for about a minute while it restarts; projectors keep playing.
+- **Install updates automatically every night at 4:00** (on by default) does both once a day.
+
+To test your own build, upload it under **Player app**. Automatic updates leave a hand-uploaded APK in place until you click **Get player … from GitHub** again.
+
+How the server update works: the server runs as the unprivileged `scenesync` user, so it can't replace itself. It writes `/var/lib/scenesync/update-requested`; the `scenesync-update.path` unit sees the file and runs `scenesync-update --update` as root. That downloads the latest release and runs its `install.sh`. Logs: `journalctl -u scenesync-update`. Servers installed before v0.5.1 need the install command run once to get the updater.
+
+The Pi needs Internet for this. Set `SCENESYNC_NO_UPDATE_CHECK=1` to never contact GitHub.
 
 ## Settings
 
@@ -34,6 +48,8 @@ The service reads these from `/etc/systemd/system/scenesync.service` (`Environme
 | `SCENESYNC_LISTEN` | `0.0.0.0:8080` | Address and port |
 | `SCENESYNC_ADMIN_PASSWORD` | from `admin_password` file | Dashboard password |
 | `SCENESYNC_NO_MDNS` | unset | Set to stop advertising on the network |
+| `SCENESYNC_NO_UPDATE_CHECK` | unset | Set to never check GitHub for updates |
+| `SCENESYNC_UPDATE_URL` | the GitHub repo's latest release API | Where to check for releases |
 | `RUST_LOG` | `info` | Log detail (`debug` for more) |
 
 ## Logs
