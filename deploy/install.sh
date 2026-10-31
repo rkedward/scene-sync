@@ -21,7 +21,13 @@ if [ "$(id -u)" != 0 ]; then
 fi
 
 case "$(uname -m)" in
-    aarch64 | arm64) name=linux-arm64 ;;
+    aarch64 | arm64)
+        # 32-bit Raspberry Pi OS can run a 64-bit kernel; the binary needs a 64-bit system.
+        if [ "$(getconf LONG_BIT 2>/dev/null)" != 64 ]; then
+            echo "This is 32-bit Raspberry Pi OS. Install the 64-bit version." >&2
+            exit 1
+        fi
+        name=linux-arm64 ;;
     x86_64 | amd64) name=linux-x64 ;;
     *) echo "Unsupported CPU $(uname -m). Use 64-bit Raspberry Pi OS." >&2; exit 1 ;;
 esac
@@ -36,18 +42,27 @@ else
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     echo "Downloading the latest SceneSync for $name…"
-    curl -fsSL "https://github.com/$REPO/releases/latest/download/scenesync-$name.tar.gz" | tar xz -C "$tmp"
+    curl -fsSL --connect-timeout 15 --max-time 900 --retry 2 \
+        "https://github.com/$REPO/releases/latest/download/scenesync-$name.tar.gz" | tar xz -C "$tmp"
     src="$tmp/scenesync-$name"
     # Let the new release's own installer finish the job.
     if [ -f "$src/install.sh" ]; then
-        sh "$src/install.sh"
+        # (--quiet, not --update, or the new installer would download again.)
+        if [ "${1:-}" = "--update" ]; then sh "$src/install.sh" --quiet; else sh "$src/install.sh"; fi
         exit $?
     fi
 fi
 
-if systemctl is-active --quiet scenesync 2>/dev/null; then
-    systemctl stop scenesync
+# Files are replaced while the server runs (install unlinks first), and it is
+# restarted only at the end, so a failure part way leaves the old one running.
+if ! command -v ffprobe >/dev/null 2>&1; then
+    echo "Installing ffmpeg (for clip length and resolution)…"
+    if command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 install -y ffmpeg >/dev/null ||
+            echo "Could not install ffmpeg; clips will still work without lengths."
+    fi
 fi
+
 install -m 755 "$src/scenesync-server" /usr/local/bin/scenesync-server
 install -m 755 "$src/scenesync-sim" /usr/local/bin/scenesync-sim
 id scenesync >/dev/null 2>&1 || useradd --system --home "$DATA" --create-home --shell /usr/sbin/nologin scenesync
@@ -62,15 +77,9 @@ for unit in scenesync-update.service scenesync-update.path; do
     fi
 done
 
-if ! command -v ffprobe >/dev/null 2>&1; then
-    echo "Installing ffmpeg (for clip length and resolution)…"
-    if command -v apt-get >/dev/null 2>&1; then
-        apt-get install -y ffmpeg >/dev/null || echo "Could not install ffmpeg; clips will still work without lengths."
-    fi
-fi
-
 systemctl daemon-reload
-systemctl enable --now scenesync
+systemctl enable scenesync
+systemctl restart scenesync
 if [ -f /etc/systemd/system/scenesync-update.path ]; then
     systemctl enable --now scenesync-update.path
 fi
@@ -80,6 +89,7 @@ ip=$(hostname -I 2>/dev/null | awk '{print $1}')
 echo
 echo "SceneSync $(/usr/local/bin/scenesync-server --version | awk '{print $2}') is running."
 echo "Dashboard: http://${ip:-this-pi}:8080  (any username)"
-if [ -f "$DATA/admin_password" ]; then
+# Not when run by the updater: its output goes to the system log.
+if [ "${1:-}" != "--quiet" ] && [ -f "$DATA/admin_password" ]; then
     echo "Password:  $(cat "$DATA/admin_password")   (to change it, edit $DATA/admin_password and run: sudo systemctl restart scenesync)"
 fi

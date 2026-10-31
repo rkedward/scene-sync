@@ -8,4 +8,5 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+TimeoutStartSec=20min
 ExecStart=/usr/local/bin/scenesync-update --update

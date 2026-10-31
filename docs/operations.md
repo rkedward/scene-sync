@@ -30,7 +30,7 @@ The dashboard's **Updates** section shows the latest release on GitHub, the serv
 
 - **Get player … from GitHub** downloads that release's APK onto the Pi. Every projector installs it.
 - **Update server to …** installs the new server. The dashboard is gone for about a minute while it restarts; projectors keep playing.
-- **Install updates automatically every night at 4:00** (on by default) does both once a day.
+- **Install updates automatically every night at 4:00** (on by default) updates the server once a day, and the player app too once you have used **Get player … from GitHub** at least once. Projectors that aren't device owner may show an Install prompt and stay black until you press it, so do player updates when you can reach the projectors, not during a show.
 
 To test your own build, upload it under **Player app**. Automatic updates leave a hand-uploaded APK in place until you click **Get player … from GitHub** again.
 
