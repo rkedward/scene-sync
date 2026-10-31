@@ -10,8 +10,15 @@
     <TextureView
         android:id="@+id/video_view"
         android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Black cover over the video until a clip's first frame is drawn. The
+         video view itself must stay visible, or it never gets a surface. -->
+    <View
+        android:id="@+id/shutter"
+        android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:visibility="invisible" />
+        android:background="@android:color/black" />
 
     <dev.scenesync.player.CalibrationView
         android:id="@+id/calibration"

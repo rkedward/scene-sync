@@ -786,3 +786,75 @@ async fn version_and_backup() {
     let body = res.bytes().await.unwrap();
     assert!(body.starts_with(b"SQLite format 3\0"));
 }
+
+#[tokio::test]
+async fn group_changes_reach_players() {
+    let (base, _dir) = start().await;
+    let http = reqwest::Client::new();
+    let admin = |rb: reqwest::RequestBuilder| rb.basic_auth("admin", Some("secret"));
+    let ta = pair(&base, &http, "a", "300001").await;
+    let tb = pair(&base, &http, "b", "300002").await;
+    let config = |token: String| {
+        let http = http.clone();
+        let base = base.clone();
+        async move {
+            http.get(format!("{base}/api/v1/device/config"))
+                .bearer_auth(token)
+                .send()
+                .await
+                .unwrap()
+                .json::<DeviceConfig>()
+                .await
+                .unwrap()
+        }
+    };
+    admin(http.put(format!("{base}/api/v1/admin/groups/g")))
+        .json(&json!({ "name": "G" }))
+        .send()
+        .await
+        .unwrap();
+    admin(http.put(format!("{base}/api/v1/admin/devices/a/group")))
+        .json(&json!({ "group_id": "g" }))
+        .send()
+        .await
+        .unwrap();
+    admin(http.put(format!("{base}/api/v1/admin/groups/g/sync")))
+        .json(&json!({ "sync": true }))
+        .send()
+        .await
+        .unwrap();
+
+    // Joining a sync group with no schedule still gives the player a new revision.
+    let before = config(tb.clone()).await.revision;
+    admin(http.put(format!("{base}/api/v1/admin/devices/b/group")))
+        .json(&json!({ "group_id": "g" }))
+        .send()
+        .await
+        .unwrap();
+    let after = config(tb.clone()).await;
+    assert!(after.revision > before);
+    assert!(after.sync.is_some());
+
+    // Deleting the group clears sync for its former members, with a new revision.
+    let before = config(ta.clone()).await.revision;
+    admin(http.delete(format!("{base}/api/v1/admin/groups/g")))
+        .send()
+        .await
+        .unwrap();
+    let after = config(ta.clone()).await;
+    assert!(after.revision > before);
+    assert!(after.sync.is_none());
+
+    // A huge max duration is clamped instead of breaking the dashboard.
+    let res = admin(http.post(format!("{base}/api/v1/admin/devices/a/command")))
+        .json(&json!({ "action": { "type": "stop" }, "max_duration_ms": u64::MAX / 2 }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "{}", res.text().await.unwrap());
+    let res = admin(http.get(format!("{base}/api/v1/admin/devices")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+}
