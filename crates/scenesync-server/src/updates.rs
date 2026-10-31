@@ -36,6 +36,10 @@ struct Saved {
     checked_at: Option<DateTime<Utc>>,
     latest: Option<Release>,
     error: Option<String>,
+    /// When a server update was last requested. The updater deletes its
+    /// note at once, so this keeps the dashboard showing "updating" meanwhile.
+    #[serde(default)]
+    server_update_requested_at: Option<DateTime<Utc>>,
 }
 
 impl Default for Saved {
@@ -45,6 +49,7 @@ impl Default for Saved {
             checked_at: None,
             latest: None,
             error: None,
+            server_update_requested_at: None,
         }
     }
 }
@@ -121,7 +126,10 @@ fn status(state: &AppState) -> Status {
         server: ServerStatus {
             update_available: latest_tag.is_some_and(|t| newer(t, &version)),
             can_update: state.config.updater_unit.exists(),
-            updating: state.config.data_dir.join(REQUEST_FILE).exists(),
+            updating: state.config.data_dir.join(REQUEST_FILE).exists()
+                || saved
+                    .server_update_requested_at
+                    .is_some_and(|t| Utc::now() - t < chrono::Duration::minutes(3)),
             version,
         },
         player: PlayerStatus {
@@ -243,6 +251,9 @@ fn request_server_update(state: &AppState, tag: &str) -> ApiResult<()> {
         ));
     }
     std::fs::write(state.config.data_dir.join(REQUEST_FILE), tag)?;
+    let mut saved = load(state);
+    saved.server_update_requested_at = Some(Utc::now());
+    save(state, &saved)?;
     tracing::info!("server update to {tag} requested");
     Ok(())
 }
@@ -357,7 +368,9 @@ async fn auto_update_inner(state: &AppState) -> ApiResult<()> {
         return Ok(());
     };
     let offered = app_update::current(state);
-    let player_follows_github = offered.as_ref().is_none_or(|o| o.tag.is_some());
+    // Only once you have chosen "Get player … from GitHub" yourself: pushing an
+    // app to projectors unasked can leave them waiting on an Install prompt.
+    let player_follows_github = offered.as_ref().is_some_and(|o| o.tag.is_some());
     let player_behind = offered
         .as_ref()
         .and_then(|o| o.tag.as_deref())

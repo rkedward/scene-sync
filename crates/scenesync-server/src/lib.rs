@@ -550,6 +550,15 @@ async fn device_socket(state: AppState, device: Device, socket: WebSocket) {
             },
             _ = ping.tick() => {
                 ok = tx.send(Message::Ping(Vec::new().into())).await.is_ok();
+                // Repeat the current revision, so a player whose last config
+                // fetch or download failed tries again instead of waiting for
+                // the next change. Players ignore a revision they already have.
+                if ok {
+                    if let Ok(Some(d)) = state.db.device(&id) {
+                        let msg = ServerMessage::ConfigChanged { revision: d.revision };
+                        ok = tx.send(Message::Text(serde_json::to_string(&msg).unwrap().into())).await.is_ok();
+                    }
+                }
             }
         }
     }
@@ -776,7 +785,8 @@ impl CommandRequest {
             action: action.clone(),
             issued_at: Utc::now(),
             hold: self.hold,
-            max_duration_ms: self.max_duration_ms,
+            // At most a week, so the end time can't overflow.
+            max_duration_ms: self.max_duration_ms.map(|m| m.min(7 * 24 * 3_600_000)),
         }))
     }
 }
@@ -948,8 +958,20 @@ async fn admin_delete_media(
     State(state): State<AppState>,
     UrlPath(id): UrlPath<String>,
 ) -> ApiResult<StatusCode> {
+    // A command that has already ended doesn't count.
+    let durations: HashMap<String, u64> = state
+        .db
+        .all_media()?
+        .into_iter()
+        .filter_map(|m| m.duration_ms.map(|v| (m.id, v)))
+        .collect();
+    let now = Utc::now();
     let in_use = state.db.devices()?.into_iter().any(|d| {
-        required_media(d.schedule.as_ref(), d.override_.as_ref())
+        let live = d.override_.as_ref().filter(|ov| {
+            scenesync_core::schedule::override_expiry(ov, d.schedule.as_ref(), &durations)
+                .is_none_or(|end| end > now)
+        });
+        required_media(d.schedule.as_ref(), live)
             .iter()
             .any(|m| m == &id)
     });

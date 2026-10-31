@@ -733,15 +733,20 @@ function bulkControls() {
 function renderBulk() {
   document.querySelectorAll('.bulk[data-target="all"]').forEach((el) => {
     const keep = el.querySelector("[data-bclip]")?.value;
+    const hold = el.querySelector("[data-bhold]")?.checked;
     el.innerHTML = `<strong>All projectors</strong> ${bulkControls()}`;
     if (keep) el.querySelector("[data-bclip]").value = keep;
+    if (hold) el.querySelector("[data-bhold]").checked = true;
   });
 }
 
 function renderGroups() {
   const names = Object.fromEntries(state.devices.map((d) => [d.id, d.name]));
-  const picked = {};
-  document.querySelectorAll("#groups .bulk").forEach((el) => (picked[el.dataset.target] = el.querySelector("[data-bclip]")?.value));
+  const picked = {}, held = {};
+  document.querySelectorAll("#groups .bulk").forEach((el) => {
+    picked[el.dataset.target] = el.querySelector("[data-bclip]")?.value;
+    held[el.dataset.target] = el.querySelector("[data-bhold]")?.checked;
+  });
   $("groups").innerHTML = state.groups.map((g) => `<div class="device" data-group-id="${esc(g.id)}">
       <h3>${esc(g.name)}</h3>
       <dl class="kv"><dt>Projectors</dt><dd>${g.devices.map((id) => esc(names[id] || id)).join(", ") || '<span class="muted">none yet; pick this group on a projector card</span>'}</dd></dl>
@@ -756,6 +761,7 @@ function renderGroups() {
     </div>`).join("") || '<p class="muted">No groups yet.</p>';
   document.querySelectorAll("#groups .bulk").forEach((el) => {
     if (picked[el.dataset.target]) el.querySelector("[data-bclip]").value = picked[el.dataset.target];
+    if (held[el.dataset.target]) el.querySelector("[data-bhold]").checked = true;
   });
 }
 
@@ -915,8 +921,11 @@ async function refresh() {
     ]);
     api("GET", "/api/v1/admin/updates").then((u) => { state.updates = u; renderUpdates(); }).catch(() => {});
     // Keep the user's clip selection while re-rendering.
-    const picked = {};
-    document.querySelectorAll(".device").forEach((el) => (picked[el.dataset.id] = el.querySelector("[data-clip]")?.value));
+    const picked = {}, held = {};
+    document.querySelectorAll(".device").forEach((el) => {
+      picked[el.dataset.id] = el.querySelector("[data-clip]")?.value;
+      held[el.dataset.id] = el.querySelector("[data-hold]")?.checked;
+    });
     Object.assign(state, { devices, media, pending, schedules, groups, app });
     renderPending(); renderMedia(); renderSchedules(); renderApp();
     const busy = document.activeElement?.tagName === "SELECT" ? document.activeElement : null;
@@ -929,6 +938,8 @@ async function refresh() {
     document.querySelectorAll(".device").forEach((el) => {
       const sel = el.querySelector("[data-clip]");
       if (sel && picked[el.dataset.id]) sel.value = picked[el.dataset.id];
+      const hold = el.querySelector("[data-hold]");
+      if (hold && held[el.dataset.id]) hold.checked = true;
     });
   } catch (e) { toast("Could not reach the server: " + e.message); }
 }

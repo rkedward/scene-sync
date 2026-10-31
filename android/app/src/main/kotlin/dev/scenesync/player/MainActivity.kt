@@ -51,6 +51,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var controller: Controller
     private lateinit var player: ExoPlayer
     private lateinit var videoView: TextureView
+    private lateinit var shutter: View
+
+    /** After a playback error, wait until this time and then try the clip again. */
+    private var retryAt = 0L
     private lateinit var calibrationView: CalibrationView
     private lateinit var overlay: View
     private lateinit var codeView: TextView
@@ -79,6 +83,7 @@ class MainActivity : ComponentActivity() {
         hideSystemBars()
 
         videoView = findViewById(R.id.video_view)
+        shutter = findViewById(R.id.shutter)
         calibrationView = findViewById(R.id.calibration)
         overlay = findViewById(R.id.overlay)
         codeView = findViewById(R.id.code)
@@ -95,19 +100,40 @@ class MainActivity : ComponentActivity() {
             // Stay black until the new clip's first frame, so the last frame of
             // the previous clip never flashes.
             override fun onRenderedFirstFrame() {
-                videoView.visibility = View.VISIBLE
+                shutter.visibility = View.GONE
             }
 
+            // Try the clip again shortly, instead of staying black until the schedule changes.
             override fun onPlayerError(error: PlaybackException) {
-                controller.reportError("Playback error: ${error.errorCodeName} ${error.message ?: ""}")
+                controller.reportError("Playback error: ${error.errorCodeName} ${error.message ?: ""}; retrying")
+                shown = null
+                current = null
+                retryAt = SystemClock.elapsedRealtime() + 3_000
             }
         })
 
-        serverInput.setOnEditorActionListener { v, actionId, _ ->
-            if (actionId == EditorInfo.IME_ACTION_DONE) {
+        // Keep the overlay up while someone types an address.
+        serverInput.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(t: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(t: CharSequence?, a: Int, b: Int, c: Int) {
+                overlayUntil = SystemClock.elapsedRealtime() + 30_000
+            }
+            override fun afterTextChanged(e: android.text.Editable?) {}
+        })
+        serverInput.setOnEditorActionListener { v, actionId, event ->
+            // A USB keyboard's Enter arrives as IME_NULL with a key event.
+            val enter = actionId == EditorInfo.IME_NULL && event?.action == android.view.KeyEvent.ACTION_UP
+            if (actionId == EditorInfo.IME_ACTION_DONE || enter) {
                 val text = v.text.toString().trim()
                 if (text.isNotEmpty()) {
-                    controller.setServerUrl(if (text.startsWith("http")) text else "http://$text")
+                    var url = if (text.startsWith("http")) text else "http://$text"
+                    // No port typed: the server listens on 8080.
+                    if (!Regex("^https?://(\\[[^\\]]*\\]|[^/:\\[]+):[0-9]+").containsMatchIn(url)) {
+                        val rest = url.substringAfter("://")
+                        val host = rest.substringBefore('/')
+                        url = url.substringBefore("://") + "://" + host + ":8080" + rest.removePrefix(host)
+                    }
+                    controller.setServerUrl(url)
                 }
                 true
             } else {
@@ -120,7 +146,8 @@ class MainActivity : ComponentActivity() {
                 launch {
                     controller.status.collect {
                         renderStatus()
-                        if (it.phase == Controller.Phase.CONNECTED) askToComeBackOnItsOwn()
+                        // Only before anything can play, so the settings page never covers a show.
+                        if (it.phase == Controller.Phase.CONNECTED && controller.config.value == null) askToComeBackOnItsOwn()
                     }
                 }
                 launch {
@@ -208,6 +235,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         calibrationView.visibility = View.GONE
+        if (SystemClock.elapsedRealtime() < retryAt) return
 
         val now = controller.clock.now()
         val durations = cfg?.media?.mapNotNull { m -> m.durationMs?.let { m.mediaId to it } }?.toMap() ?: emptyMap()
@@ -297,6 +325,10 @@ class MainActivity : ComponentActivity() {
                 if (file == null) {
                     controller.reportError("Clip ${desired.mediaId} is not downloaded")
                     showBlack()
+                    // Check again in a few seconds, in case the download finishes.
+                    shown = null
+                    current = null
+                    retryAt = SystemClock.elapsedRealtime() + 5_000
                     return
                 }
                 val sinceStart = Duration.between(desired.anchor, now).toMillis().coerceAtLeast(0)
@@ -310,7 +342,7 @@ class MainActivity : ComponentActivity() {
                     desired.resume == ResumePolicy.CONTINUE && duration != null && duration > 0 -> sinceStart % duration
                     else -> 0L
                 }
-                videoView.visibility = View.INVISIBLE
+                shutter.visibility = View.VISIBLE
                 player.playbackParameters = PlaybackParameters(1f)
                 player.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)), startMs)
                 player.repeatMode = if (desired.looping) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
@@ -323,7 +355,7 @@ class MainActivity : ComponentActivity() {
     private fun showBlack() {
         player.stop()
         player.clearMediaItems()
-        videoView.visibility = View.INVISIBLE
+        shutter.visibility = View.VISIBLE
     }
 
     private fun renderStatus() {
@@ -347,10 +379,14 @@ class MainActivity : ComponentActivity() {
             ""
         }
         statusView.text = if (setupNeeded) s.message else "${s.message}\n$nowText$tip"
-        val wantInput = s.phase == Controller.Phase.NEED_SERVER_URL
+        // While the server can't be reached, the address box is offered too
+        // (press a key to show it), in case the Pi moved to a new address.
+        val askForAddress = s.phase == Controller.Phase.NEED_SERVER_URL
+        val wantInput = askForAddress || (visible &&
+            (s.phase == Controller.Phase.OFFLINE || s.phase == Controller.Phase.PAIRING))
         if (wantInput && serverInput.visibility != View.VISIBLE) {
             serverInput.visibility = View.VISIBLE
-            serverInput.requestFocus()
+            if (askForAddress) serverInput.requestFocus()
         } else if (!wantInput) {
             serverInput.visibility = View.GONE
         }

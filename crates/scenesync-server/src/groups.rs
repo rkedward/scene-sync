@@ -49,7 +49,10 @@ pub(crate) async fn remove(
     State(state): State<AppState>,
     UrlPath(id): UrlPath<String>,
 ) -> ApiResult<StatusCode> {
+    let members = state.db.group(&id)?.map(|g| g.devices).unwrap_or_default();
     if state.db.delete_group(&id)? {
+        // Former members lose the group's sync and mute settings.
+        bump_all(&state, &members)?;
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found("group"))
@@ -100,10 +103,18 @@ pub(crate) async fn set_device_group(
     UrlPath(device_id): UrlPath<String>,
     Json(req): Json<MembershipRequest>,
 ) -> ApiResult<StatusCode> {
-    state
+    let device = state
         .db
         .device(&device_id)?
         .ok_or_else(|| ApiError::not_found("device"))?;
+    // Members of the old and new group: their sync settings (who plays
+    // sound, who is in step) can change with membership.
+    let mut affected = vec![device_id.clone()];
+    if let Some(old) = device.group_id.as_deref() {
+        if let Some(g) = state.db.group(old)? {
+            affected.extend(g.devices);
+        }
+    }
     let group = match &req.group_id {
         Some(gid) => Some(
             state
@@ -116,10 +127,25 @@ pub(crate) async fn set_device_group(
     state
         .db
         .set_device_group(&device_id, req.group_id.as_deref())?;
+    if let Some(g) = &group {
+        affected.extend(g.devices.iter().cloned());
+    }
     if let Some(sid) = group.and_then(|g| g.schedule_id) {
         assign(&state, &device_id, Some(&sid))?;
     }
+    affected.sort();
+    affected.dedup();
+    bump_all(&state, &affected)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Tells these projectors to re-read their config.
+fn bump_all(state: &AppState, ids: &[String]) -> ApiResult<()> {
+    for d in ids {
+        let rev = state.db.bump_revision(d)?;
+        state.notify(d, rev);
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]

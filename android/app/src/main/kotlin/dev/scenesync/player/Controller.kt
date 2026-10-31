@@ -143,7 +143,7 @@ class Controller(private val context: Context) {
             // save a link-local IPv6 one) is dropped and the server found again.
             prefs.serverUrl?.let { if (it.toHttpUrlOrNull() == null) prefs.serverUrl = null }
             val server = prefs.serverUrl ?: findServer().also { prefs.serverUrl = it }
-            val token = prefs.token ?: pair(server)
+            val token = prefs.token ?: pair(server) ?: continue
             try {
                 connectionLoop(server, token)
             } catch (e: Unauthorized) {
@@ -159,7 +159,9 @@ class Controller(private val context: Context) {
         val discovery = scope.launch {
             var first = true
             while (!result.isCompleted) {
-                Discovery.find(context, 15_000)?.let { result.complete(it) }
+                runCatching { Discovery.find(context, 15_000) }
+                    .onFailure { reportError("Server search failed: ${it.message}") }
+                    .getOrNull()?.let { result.complete(it) }
                 if (first && !result.isCompleted) {
                     first = false
                     _status.value = Status(
@@ -178,7 +180,28 @@ class Controller(private val context: Context) {
         return url
     }
 
-    private suspend fun pair(server: String): String {
+    /**
+     * Waits up to [ms] for an address typed on the projector. Returns true if
+     * one was typed and saved, so the caller should start again with it.
+     */
+    private suspend fun typedNewServer(ms: Long, current: String): Boolean {
+        val typed = withTimeoutOrNull(ms) { manualServerUrl.receive() } ?: return false
+        if (typed == current) return false
+        prefs.serverUrl = typed
+        return true
+    }
+
+    /** Looks for the server again; true if it is now at a different address (saved). */
+    private suspend fun foundServerElsewhere(current: String): Boolean {
+        val found = runCatching { Discovery.find(context, 10_000) }.getOrNull() ?: return false
+        if (found == current) return false
+        Log.i(TAG, "server moved: $current -> $found")
+        prefs.serverUrl = found
+        return true
+    }
+
+    /** Returns the token, or null if the server address changed and pairing must start again. */
+    private suspend fun pair(server: String): String? {
         val code = prefs.pairingCode
         _status.value = Status(Phase.PAIRING, "Enter this code in the SceneSync dashboard at $server", code)
         val req = PairRequest(
@@ -189,6 +212,7 @@ class Controller(private val context: Context) {
             appVersion = appVersion,
         )
         val body = SceneSyncJson.encodeToString(PairRequest.serializer(), req).toRequestBody(JSON)
+        var failures = 0
         while (true) {
             try {
                 http.newCall(Request.Builder().url("$server/api/v1/pair").post(body).build()).execute().use { res ->
@@ -205,25 +229,30 @@ class Controller(private val context: Context) {
                     }
                 }
             } catch (e: IOException) {
-                _status.value = _status.value.copy(message = "Cannot reach $server (${e.message}); retrying")
+                _status.value = _status.value.copy(message = "Cannot reach $server (${e.message}); retrying. You can type a new address.")
+                if (++failures % 5 == 0 && foundServerElsewhere(server)) return null
             }
-            delay(3_000)
+            if (typedNewServer(3_000, server)) return null
         }
     }
 
     private suspend fun connectionLoop(server: String, token: String) {
         var backoffMs = 1_000L
+        var failures = 0
         while (true) {
             try {
                 connectOnce(server, token)
                 backoffMs = 1_000L
+                failures = 0
             } catch (e: Unauthorized) {
                 throw e
             } catch (e: Exception) {
                 Log.w(TAG, "connection: ${e.message}")
             }
-            _status.value = Status(Phase.OFFLINE, "Server unreachable; playing from saved schedule")
-            delay(backoffMs)
+            _status.value = Status(Phase.OFFLINE, "Server unreachable at $server; playing from saved schedule. You can type a new address.")
+            // The Pi may have a new address (new router, new DHCP lease): look for it again.
+            if (++failures % 3 == 0 && foundServerElsewhere(server)) return
+            if (typedNewServer(backoffMs, server)) return
             backoffMs = (backoffMs * 2).coerceAtMost(30_000L)
         }
     }
@@ -340,16 +369,30 @@ class Controller(private val context: Context) {
     /** Resumable download into `<sha>.part`, verified before it is renamed into place. */
     private fun download(server: String, token: String, m: MediaRef) {
         val part = File(mediaDir, "${m.sha256}.part")
+        if (part.exists() && part.length() > m.size) part.delete()
         val have = if (part.exists()) part.length() else 0L
+        // A complete .part (the app stopped before the rename) only needs checking.
+        if (have < m.size) downloadFrom(server, token, m, part, have)
+        verifyAndSave(m, part)
+    }
+
+    private fun downloadFrom(server: String, token: String, m: MediaRef, part: File, have: Long) {
         val req = authed(server + m.url, token).apply { if (have > 0) header("Range", "bytes=$have-") }.build()
         http.newCall(req).execute().use { res ->
             if (res.code == 401) throw Unauthorized()
+            if (res.code == 416) {
+                part.delete()
+                throw IOException("download ${m.mediaId}: starting again")
+            }
             if (!res.isSuccessful) throw IOException("download ${m.mediaId}: HTTP ${res.code}")
             val append = res.code == 206
             res.body!!.byteStream().use { input ->
                 java.io.FileOutputStream(part, append).use { out -> input.copyTo(out, 64 * 1024) }
             }
         }
+    }
+
+    private fun verifyAndSave(m: MediaRef, part: File) {
         val digest = MessageDigest.getInstance("SHA-256")
         part.inputStream().use { input ->
             val buf = ByteArray(64 * 1024)

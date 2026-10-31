@@ -33,8 +33,11 @@ object Discovery {
     @Suppress("DEPRECATION")
     suspend fun find(context: Context, timeoutMs: Long): String? {
         val nsd = context.getSystemService(Context.NSD_SERVICE) as NsdManager
-        val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        val lock = wifi.createMulticastLock("scenesync-discovery").apply { setReferenceCounted(false); acquire() }
+        // Some boxes (wired-only) have no Wi-Fi service; discovery still works without the lock.
+        val lock = runCatching {
+            (context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager)
+                ?.createMulticastLock("scenesync-discovery")?.apply { setReferenceCounted(false); acquire() }
+        }.getOrNull()
         try {
             return withTimeoutOrNull(timeoutMs) {
                 suspendCancellableCoroutine { cont ->
@@ -43,11 +46,12 @@ object Discovery {
                         override fun onDiscoveryStarted(serviceType: String) {}
                         override fun onDiscoveryStopped(serviceType: String) {}
                         override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
-                            if (!done) { done = true; cont.resume(null) }
+                            synchronized(this@Discovery) { if (!done) { done = true; cont.resume(null) } }
                         }
                         override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
                         override fun onServiceLost(service: NsdServiceInfo) {}
                         override fun onServiceFound(service: NsdServiceInfo) {
+                            val discovery = this
                             nsd.resolveService(service, object : NsdManager.ResolveListener {
                                 override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {}
                                 override fun onServiceResolved(info: NsdServiceInfo) {
@@ -55,6 +59,8 @@ object Discovery {
                                     synchronized(this@Discovery) {
                                         if (!done) { done = true; cont.resume("http://$h:${info.port}") }
                                     }
+                                    // Found it: stop searching, so repeated searches don't pile up.
+                                    runCatching { nsd.stopServiceDiscovery(discovery) }
                                 }
                             })
                         }
@@ -64,7 +70,7 @@ object Discovery {
                 }
             }
         } finally {
-            lock.release()
+            runCatching { lock?.release() }
         }
     }
 }

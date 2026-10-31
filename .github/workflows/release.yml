@@ -49,6 +49,14 @@ jobs:
       - name: Cross compiler
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Check the version matches Cargo.toml
+        if: env.RELEASE_TAG != ''
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$v" != "${RELEASE_TAG#v}" ]; then
+            echo "Cargo.toml says $v but the release is $RELEASE_TAG. Bump the version first." >&2
+            exit 1
+          fi
       - name: Build
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
