@@ -7,6 +7,9 @@ pub const SERVICE_TYPE: &str = "_scenesync._tcp.local.";
 
 pub fn advertise(port: u16) -> Result<()> {
     let daemon = ServiceDaemon::new()?;
+    // Players connect over IPv4. Advertising IPv6 link-local addresses
+    // (fe80::…) made some projectors pick one they couldn't use.
+    daemon.disable_interface(mdns_sd::IfKind::IPv6)?;
     let host = hostname();
     let info = ServiceInfo::new(
         SERVICE_TYPE,

@@ -4,6 +4,10 @@ import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
+import android.os.Build
+import java.net.Inet4Address
+import java.net.Inet6Address
+import java.net.InetAddress
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
@@ -11,6 +15,20 @@ import kotlin.coroutines.resume
 /** Finds the server on the LAN via mDNS (`_scenesync._tcp`). */
 object Discovery {
     private const val SERVICE_TYPE = "_scenesync._tcp."
+
+    /**
+     * An address an HTTP client can use: IPv4 first, then a global IPv6.
+     * Link-local IPv6 (fe80::…%wlan0) is skipped: OkHttp can't use it.
+     */
+    @Suppress("DEPRECATION")
+    private fun usableHost(info: NsdServiceInfo): String? {
+        val all: List<InetAddress> =
+            if (Build.VERSION.SDK_INT >= 34) info.hostAddresses else listOfNotNull(info.host)
+        all.firstOrNull { it is Inet4Address }?.let { return it.hostAddress }
+        val v6 = all.firstOrNull { it is Inet6Address && !it.isLinkLocalAddress && !it.isSiteLocalAddress }
+            ?: return null
+        return "[" + v6.hostAddress!!.substringBefore('%') + "]"
+    }
 
     @Suppress("DEPRECATION")
     suspend fun find(context: Context, timeoutMs: Long): String? {
@@ -33,8 +51,7 @@ object Discovery {
                             nsd.resolveService(service, object : NsdManager.ResolveListener {
                                 override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {}
                                 override fun onServiceResolved(info: NsdServiceInfo) {
-                                    val host = info.host?.hostAddress ?: return
-                                    val h = if (host.contains(':')) "[$host]" else host
+                                    val h = usableHost(info) ?: return
                                     synchronized(this@Discovery) {
                                         if (!done) { done = true; cont.resume("http://$h:${info.port}") }
                                     }

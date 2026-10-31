@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -126,13 +127,21 @@ class Controller(private val context: Context) {
 
     /** Called when the user types a server address on the projector. */
     fun setServerUrl(url: String) {
-        manualServerUrl.trySend(url.trim().trimEnd('/'))
+        val clean = url.trim().trimEnd('/')
+        if (clean.toHttpUrlOrNull() == null) {
+            _status.value = _status.value.copy(message = "\"$clean\" isn't a valid address. Try something like http://192.168.1.50:8080")
+            return
+        }
+        manualServerUrl.trySend(clean)
     }
 
     // -----------------------------------------------------------------------
 
     private suspend fun mainLoop() {
         while (true) {
+            // A saved address the HTTP client can't use (older versions could
+            // save a link-local IPv6 one) is dropped and the server found again.
+            prefs.serverUrl?.let { if (it.toHttpUrlOrNull() == null) prefs.serverUrl = null }
             val server = prefs.serverUrl ?: findServer().also { prefs.serverUrl = it }
             val token = prefs.token ?: pair(server)
             try {

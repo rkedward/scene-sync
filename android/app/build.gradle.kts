@@ -16,7 +16,7 @@ android {
         // Minutes since 2026-01-01 at build time: every newer build (CI, release
         // or local) has a higher number, so it can replace an older one.
         versionCode = (System.currentTimeMillis() / 60_000 - 29_453_760).toInt()
-        versionName = System.getenv("SCENESYNC_VERSION") ?: "0.5.3"
+        versionName = System.getenv("SCENESYNC_VERSION") ?: "0.5.4"
     }
 
     signingConfigs {
