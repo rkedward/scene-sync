@@ -42,7 +42,14 @@ class PlayerService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        startInForeground()
+        // If this projector won't allow a background service, the player still works.
+        if (runCatching { startInForeground() }.onFailure {
+                (application as SceneSyncApp).controller.reportError("Background service not allowed: ${it.message}")
+            }.isFailure
+        ) {
+            stopSelf()
+            return
+        }
         val controller = (application as SceneSyncApp).controller
         scope.launch {
             while (isActive) {
