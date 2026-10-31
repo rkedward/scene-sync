@@ -53,7 +53,7 @@ The server advertises itself on the network as `_scenesync._tcp`, so players usu
 
 ## Install the player on a projector
 
-Download `scenesync-player.apk` from the [latest release](https://github.com/rkedward/scene-sync/releases/latest). Each CI run also builds one (see the **Actions** tab, artifact `scenesync-player-debug-apk`). To build it yourself: install Android Studio or the Android SDK, then run `./gradlew :app:assembleDebug` in `android/`.
+Download `scenesync-player.apk` from the [latest release](https://github.com/rkedward/scene-sync/releases/latest) (the same file is also there as `scenesync-player-vX.Y.Z.apk`, with the version in its name). The player shows its version at the top of its status screen. Each CI run also builds one (see the **Actions** tab, artifact `scenesync-player-debug-apk`). To build it yourself: install Android Studio or the Android SDK, then run `./gradlew :app:assembleDebug` in `android/`.
 
 The simplest install is from a USB stick: copy the APK onto it, open it in the projector's file manager, and allow "install unknown apps" when asked. Through a USB hub you can keep a mouse plugged in at the same time. If the projector allows network debugging, `adb` works too:
 

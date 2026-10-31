@@ -15,6 +15,7 @@ import dev.scenesync.engine.SceneSyncJson
 import dev.scenesync.engine.ServerMessage
 import dev.scenesync.engine.TimeResponse
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -49,7 +50,13 @@ class Controller(private val context: Context) {
 
     private class Unauthorized : IOException("device token rejected")
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // An unexpected error in a background task is reported, not a crash.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, e ->
+            Log.e(TAG, "background task failed", e)
+            reportError(CrashLog.describe(e, "background task").take(2_000))
+        },
+    )
     private val prefs = Prefs(context)
     val clock = ServerClock(prefs)
 
@@ -86,8 +93,25 @@ class Controller(private val context: Context) {
     fun start() {
         if (started) return
         started = true
-        scope.launch { mainLoop() }
-        scope.launch { reportLoop() }
+        CrashLog.take(context)?.let { reportError(it.take(2_000)) }
+        scope.launch { keepRunning("connection") { mainLoop() } }
+        scope.launch { keepRunning("reports") { reportLoop() } }
+    }
+
+    /** Runs [block] again after any unexpected error, so one bad reply can't stop the player. */
+    private suspend fun keepRunning(name: String, block: suspend () -> Unit) {
+        while (true) {
+            try {
+                block()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.e(TAG, "$name failed", e)
+                reportError(CrashLog.describe(e, name).take(2_000))
+                _status.value = _status.value.copy(message = "Error: ${e.javaClass.simpleName}: ${e.message}; retrying")
+                delay(5_000)
+            }
+        }
     }
 
     fun mediaFile(mediaId: String): File? {

@@ -84,6 +84,7 @@ class MainActivity : ComponentActivity() {
         codeView = findViewById(R.id.code)
         statusView = findViewById(R.id.status)
         serverInput = findViewById(R.id.server_input)
+        findViewById<TextView>(R.id.title).text = "SceneSync Player ${BuildConfig.VERSION_NAME}"
 
         player = ExoPlayer.Builder(this).build()
         player.setVideoTextureView(videoView)
