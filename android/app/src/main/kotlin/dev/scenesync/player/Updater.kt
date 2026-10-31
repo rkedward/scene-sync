@@ -42,6 +42,17 @@ class Updater(
         val apk = File(dir, "${release.sha256}.apk")
         if (!apk.exists()) download(server, token, release, apk)
         dir.listFiles()?.forEach { if (it != apk) it.delete() }
+        // Never step back to an older build (Android refuses it anyway).
+        val offered = archiveVersion(apk)
+        if (offered != null && offered.second <= BuildConfig.VERSION_CODE) {
+            sp.edit().putString("failed", release.sha256).apply()
+            apk.delete()
+            onError(
+                "The Pi offers an older player app (${offered.first}); keeping ${BuildConfig.VERSION_NAME}. " +
+                    "Click \"Get player … from GitHub\" in the dashboard to offer the latest.",
+            )
+            return
+        }
         Log.i(TAG, "installing update ${release.sha256.take(12)}")
         sp.edit().putString("installing", release.sha256).putLong("installing_at", System.currentTimeMillis()).apply()
         install(apk)
@@ -65,6 +76,14 @@ class Updater(
             throw IOException("app download: checksum mismatch")
         }
         if (!part.renameTo(dest)) throw IOException("app download: could not save")
+    }
+
+    /** (versionName, versionCode) of a downloaded APK, or null if Android can't read it. */
+    @Suppress("DEPRECATION")
+    private fun archiveVersion(apk: File): Pair<String, Long>? {
+        val info = context.packageManager.getPackageArchiveInfo(apk.path, 0) ?: return null
+        val code = if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
+        return (info.versionName ?: "?") to code
     }
 
     private fun install(apk: File) {
