@@ -472,6 +472,18 @@ async fn fit_to_window() {
     let c = config().await;
     assert!(c.mapping.is_none() && !c.calibrate);
 
+    // Mute on and off reaches the projector's config.
+    assert!(!c.muted);
+    for on in [true, false] {
+        let res = admin(http.put(format!("{base}/api/v1/admin/devices/dev-3/muted")))
+            .json(&json!({ "on": on }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 204);
+        assert_eq!(config().await.muted, on);
+    }
+
     // Unknown device.
     let res = admin(http.put(format!("{base}/api/v1/admin/devices/nope/calibrate")))
         .json(&json!({ "on": true }))

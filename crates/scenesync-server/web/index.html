@@ -308,6 +308,7 @@ function renderDevices() {
         <dt>Storage</dt><dd>${space}</dd>
         <dt>Clips</dt><dd>${d.media.map(esc).join(", ") || "none"}</dd>
         ${syncRow(d, r)}
+        <dt>Sound</dt><dd>${d.muted ? '<span class="warn">muted</span>' : "on"}</dd>
         <dt>Fit</dt><dd>${d.calibrate ? '<span class="warn">showing pattern</span>' : d.mapping ? "fitted to window" : "full frame"}</dd>
         <dt>Model</dt><dd>${esc(d.model || "–")} · app ${esc(d.app_version || "–")}${appStatus(r)}</dd>
         ${errors}
@@ -326,6 +327,7 @@ function renderDevices() {
       <div class="row">
         <button data-cmd="stop">Black</button>
         <button data-cmd="clear" ${d.override ? "" : "disabled"}>Return to schedule</button>
+        <button data-mute>${d.muted ? "Unmute" : "Mute"}</button>
         <label class="muted"><input type="checkbox" data-hold> Hold until cleared</label>
       </div>
       <div class="row">
@@ -727,7 +729,8 @@ function bulkControls() {
   return `<select data-bclip>${options}</select>
     <button data-bcmd="once">Play once</button><button data-bcmd="loop" class="primary">Loop</button>
     <button data-bcmd="stop">Black</button><button data-bcmd="clear">Return to schedule</button>
-    <label class="muted"><input type="checkbox" data-bhold> Hold</label>`;
+    <label class="muted"><input type="checkbox" data-bhold> Hold</label>
+    <button data-bmute="on">Mute</button><button data-bmute="off">Unmute</button>`;
 }
 
 function renderBulk() {
@@ -816,6 +819,21 @@ function renderApp() {
     : "No app uploaded. Projectors keep the version they have.";
   $("apk-remove").hidden = !a;
 }
+
+// Mute or unmute every projector in a bulk bar (all, or one group).
+document.addEventListener("click", async (e) => {
+  const how = e.target.dataset?.bmute; if (!how) return;
+  const target = e.target.closest(".bulk").dataset.target;
+  const ids = target === "all" ? state.devices.map((d) => d.id)
+    : (state.groups.find((g) => g.id === target)?.devices || []);
+  if (!ids.length) return toast("No projectors here yet.");
+  try {
+    await Promise.all(ids.map((id) =>
+      api("PUT", `/api/v1/admin/devices/${encodeURIComponent(id)}/muted`, { on: how === "on" })));
+    toast(how === "on" ? "Muted." : "Sound on.");
+    refresh();
+  } catch (err) { toast(err.message); }
+});
 
 document.addEventListener("click", async (e) => {
   const cmd = e.target.dataset?.bcmd; if (!cmd) return;
@@ -972,6 +990,9 @@ $("devices").addEventListener("click", async (e) => {
       const trim_ms = parseInt(card.querySelector("[data-trim]").value || "0", 10);
       await api("PUT", `/api/v1/admin/devices/${encodeURIComponent(id)}/trim`, { trim_ms });
       toast(`Trim set to ${trim_ms} ms.`);
+    } else if (e.target.dataset.mute !== undefined) {
+      const d = state.devices.find((d) => d.id === id);
+      await api("PUT", `/api/v1/admin/devices/${encodeURIComponent(id)}/muted`, { on: !d?.muted });
     } else if (e.target.dataset.fit !== undefined) {
       openFit(id); return;
     } else if (e.target.dataset.rename !== undefined) {

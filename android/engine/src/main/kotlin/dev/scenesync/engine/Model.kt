@@ -172,6 +172,8 @@ data class DeviceConfig(
     val calibrate: Boolean = false,
     /** The player APK every projector should run. */
     @SerialName("app_update") val appUpdate: AppRelease? = null,
+    /** Play without sound (the dashboard's Mute button). */
+    val muted: Boolean = false,
     /** Present when this projector plays in sync with its group. */
     val sync: SyncConfig? = null,
 )

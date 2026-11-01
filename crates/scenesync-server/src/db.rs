@@ -32,6 +32,7 @@ pub struct Device {
     pub override_: Option<Override>,
     pub mapping: Option<Mapping>,
     pub calibrate: bool,
+    pub muted: bool,
     pub group_id: Option<String>,
     pub trim_ms: i64,
 }
@@ -163,6 +164,12 @@ fn migrate(conn: &Connection) -> Result<()> {
     if !has_column("devices", "calibrate")? {
         conn.execute(
             "ALTER TABLE devices ADD COLUMN calibrate INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !has_column("devices", "muted")? {
+        conn.execute(
+            "ALTER TABLE devices ADD COLUMN muted INTEGER NOT NULL DEFAULT 0",
             [],
         )?;
     }
@@ -346,7 +353,7 @@ impl Db {
         Ok(self
             .conn()
             .query_row(
-                "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id, d.mapping_json, d.calibrate, d.group_id, d.trim_ms
+                "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id, d.mapping_json, d.calibrate, d.group_id, d.trim_ms, d.muted
                  FROM devices d LEFT JOIN schedules s ON s.id = d.schedule_id WHERE d.id = ?1",
                 params![id],
                 device_row,
@@ -357,7 +364,7 @@ impl Db {
     pub fn devices(&self) -> Result<Vec<Device>> {
         let c = self.conn();
         let mut st = c.prepare(
-            "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id, d.mapping_json, d.calibrate, d.group_id, d.trim_ms
+            "SELECT d.id, d.name, d.model, d.app_version, d.paired_at, d.last_seen, d.revision, d.report_json, s.json, d.override_json, d.schedule_id, d.mapping_json, d.calibrate, d.group_id, d.trim_ms, d.muted
              FROM devices d LEFT JOIN schedules s ON s.id = d.schedule_id ORDER BY d.name",
         )?;
         let rows = st
@@ -436,6 +443,15 @@ impl Db {
     pub fn set_calibrate(&self, id: &str, on: bool) -> Result<Option<u64>> {
         self.conn().execute(
             "UPDATE devices SET calibrate = ?2 WHERE id = ?1",
+            params![id, on as i64],
+        )?;
+        self.bump_revision(id)
+    }
+
+    /// Mutes or unmutes a projector. Returns the new revision.
+    pub fn set_muted(&self, id: &str, on: bool) -> Result<Option<u64>> {
+        self.conn().execute(
+            "UPDATE devices SET muted = ?2 WHERE id = ?1",
             params![id, on as i64],
         )?;
         self.bump_revision(id)
@@ -762,6 +778,7 @@ fn device_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Device> {
         calibrate: r.get::<_, i64>(12)? != 0,
         group_id: r.get(13)?,
         trim_ms: r.get(14)?,
+        muted: r.get::<_, i64>(15)? != 0,
     })
 }
 

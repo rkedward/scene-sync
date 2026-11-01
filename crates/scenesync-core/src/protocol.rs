@@ -88,6 +88,9 @@ pub struct DeviceConfig {
     /// a different SHA-256 downloads and installs this one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_update: Option<AppRelease>,
+    /// Play without sound (set from the dashboard's Mute button).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub muted: bool,
     /// Present when this projector plays in sync with its group.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync: Option<SyncConfig>,
