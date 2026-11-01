@@ -167,6 +167,7 @@ pub fn app(state: AppState) -> Router {
             "/api/v1/admin/devices/{id}/calibrate",
             put(admin_set_calibrate),
         )
+        .route("/api/v1/admin/devices/{id}/muted", put(admin_set_muted))
         .route(
             "/api/v1/admin/devices/{id}/schedule",
             put(schedules::set_device_schedule),
@@ -471,6 +472,7 @@ fn build_config(state: &AppState, d: &Device) -> ApiResult<DeviceConfig> {
         idle: IdleMode::Black,
         mapping: d.mapping.clone(),
         calibrate: d.calibrate,
+        muted: d.muted,
         app_update: app_update::release_for_config(state),
         sync: groups::sync_config(state, d)?,
     })
@@ -695,6 +697,21 @@ async fn admin_set_calibrate(
     let rev = state
         .db
         .set_calibrate(&id, req.on)?
+        .ok_or_else(|| ApiError::not_found("device"))?;
+    state.notify(&id, Some(rev));
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Mutes or unmutes the projector's sound.
+async fn admin_set_muted(
+    _: Admin,
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+    Json(req): Json<CalibrateRequest>,
+) -> ApiResult<StatusCode> {
+    let rev = state
+        .db
+        .set_muted(&id, req.on)?
         .ok_or_else(|| ApiError::not_found("device"))?;
     state.notify(&id, Some(rev));
     Ok(StatusCode::NO_CONTENT)

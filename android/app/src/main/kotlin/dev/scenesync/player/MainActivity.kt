@@ -240,7 +240,7 @@ class MainActivity : ComponentActivity() {
         val now = controller.clock.now()
         val durations = cfg?.media?.mapNotNull { m -> m.durationMs?.let { m.mediaId to it } }?.toMap() ?: emptyMap()
         val desired = evaluate(cfg?.schedule, cfg?.override, durations, now, current)
-        val volume = if (cfg?.sync?.muted == true) 0f else 1f
+        val volume = if (cfg?.muted == true || cfg?.sync?.muted == true) 0f else 1f
         if (player.volume != volume) player.volume = volume
         if (desired == shown) {
             if (desired is Desired.Play && cfg?.sync != null) keepInSync(desired, cfg.sync!!.trimMs, durations)

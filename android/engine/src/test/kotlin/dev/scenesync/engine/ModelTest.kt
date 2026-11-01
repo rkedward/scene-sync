@@ -24,5 +24,12 @@ class ModelTest {
         val cfg = SceneSyncJson.decodeFromString(DeviceConfig.serializer(), json)
         assertNull(cfg.mapping)
         assertFalse(cfg.calibrate)
+        assertFalse(cfg.muted)
+    }
+
+    @Test
+    fun decodesMuted() {
+        val json = """{"protocol_version":1,"device_id":"d","name":"Garage","revision":2,"media":[],"muted":true}"""
+        assertTrue(SceneSyncJson.decodeFromString(DeviceConfig.serializer(), json).muted)
     }
 }
